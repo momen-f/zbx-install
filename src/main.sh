@@ -15,6 +15,8 @@ _SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # @dev-source
 source "$_SRC_DIR/lib/core.sh" # @dev-source
 # shellcheck source=lib/ui.sh
 source "$_SRC_DIR/lib/ui.sh" # @dev-source
+# shellcheck source=lib/detect.sh
+source "$_SRC_DIR/lib/detect.sh" # @dev-source
 
 # Version/date: injected by build.sh; fall back to the VERSION file in dev.
 main_version() {
@@ -116,11 +118,17 @@ main() {
   log INFO "zbx-install starting (mode=$MODE, dry_run=$DRY_RUN)"
   [[ -n "$CONFIG_FILE" ]] && log INFO "config file: $CONFIG_FILE"
 
-  # Phase 0 scaffold: the pipeline modules land in later phases.
+  if [[ "$MODE" == "detect-only" ]]; then
+    detect_run
+    detect_report
+    exit 0
+  fi
+
+  # Later phases dispatch recommend/plan/pipeline here (SPEC §18 Phase 2+).
   printf '%szbx-install %s%s\n' "$C_BOLD" "$(main_version)" "$C_RESET"
   printf 'Selected mode: %s\n' "$MODE"
-  printf 'Pipeline not yet implemented in this build (SPEC §18 Phase 0).\n'
-  log INFO "exiting Phase 0 scaffold cleanly"
+  printf 'Pipeline not yet implemented in this build (SPEC §18 Phase 2+).\n'
+  log INFO "exiting scaffold cleanly (mode=$MODE)"
 }
 
 main "$@"

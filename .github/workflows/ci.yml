@@ -26,3 +26,32 @@ jobs:
 
       - name: Unit tests (bats)
         run: make test
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", id: "ubuntu", family: "debian" }
+          - { image: "ubuntu:24.04", id: "ubuntu", family: "debian" }
+          - { image: "debian:12", id: "debian", family: "debian" }
+          - { image: "debian:13", id: "debian", family: "debian" }
+          - { image: "rockylinux:9", id: "rocky", family: "rhel" }
+          - { image: "almalinux:8", id: "almalinux", family: "rhel" }
+          - { image: "opensuse/leap:15.6", id: "opensuse-leap", family: "suse" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the bundle
+        run: ./build.sh
+
+      - name: Run --detect-only in ${{ matrix.image }}
+        run: |
+          out="$(docker run --rm -e DETECT_SKIP_NET=1 -v "$PWD:/w" -w /w \
+            "${{ matrix.image }}" bash dist/zbx-install.sh --detect-only --no-color)"
+          echo "$out"
+          echo "$out" | grep -q "ID / version:    ${{ matrix.id }}"
+          echo "$out" | grep -q "Family:          ${{ matrix.family }}"
+          echo "$out" | grep -q "Supported:       yes"

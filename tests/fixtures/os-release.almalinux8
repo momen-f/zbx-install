@@ -1,0 +1,6 @@
+NAME="AlmaLinux"
+VERSION="8.9 (Midnight Oncilla)"
+ID="almalinux"
+ID_LIKE="rhel centos fedora"
+VERSION_ID="8.9"
+PRETTY_NAME="AlmaLinux 8.9 (Midnight Oncilla)"

@@ -29,9 +29,16 @@ fmt:
 test:
 	PATH="$(BASH_DIR):$$PATH" bats tests/bats
 
-# Container smoke matrix (filled in from Phase 1 onward). SPEC §16.
-matrix:
-	@echo "matrix: implemented from Phase 1 (container smoke tests)"
+# Container smoke matrix: run --detect-only on each supported image (§16).
+# Skips gracefully if docker is unavailable (e.g. on a dev laptop).
+SMOKE_IMAGES := ubuntu:22.04 ubuntu:24.04 debian:12 debian:13 rockylinux:9 almalinux:8 opensuse/leap:15.6
+matrix: build
+	@command -v docker >/dev/null 2>&1 || { echo "docker not found; skipping matrix"; exit 0; }
+	@for img in $(SMOKE_IMAGES); do \
+	  echo "== $$img =="; \
+	  docker run --rm -e DETECT_SKIP_NET=1 -v "$$PWD:/w" -w /w "$$img" \
+	    bash dist/zbx-install.sh --detect-only --no-color || exit 1; \
+	done
 
 clean:
 	rm -rf dist
