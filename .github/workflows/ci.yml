@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck bats
+          curl -fsSL "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64" \
+            -o /usr/local/bin/shfmt
+          sudo chmod +x /usr/local/bin/shfmt
+
+      - name: Format check (shfmt)
+        run: make fmt
+
+      - name: Lint (shellcheck)
+        run: make lint
+
+      - name: Unit tests (bats)
+        run: make test
