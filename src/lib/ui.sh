@@ -9,6 +9,17 @@
 # Every prompt here has a flag/config equivalent in main.sh, so unattended runs
 # never reach this module. §3.
 
+# ui_row LABEL VALUE [COLOR] — one aligned two-column report line (shared by
+# detect_report and plan_report).
+ui_row() {
+  local color="${3:-}"
+  if [[ -n "$color" ]]; then
+    printf '  %-16s %s%s%s\n' "$1" "$color" "$2" "$C_RESET"
+  else
+    printf '  %-16s %s\n' "$1" "$2"
+  fi
+}
+
 # ui_gen_password — 20-char secret, openssl preferred, /dev/urandom fallback. §10
 ui_gen_password() {
   local out
@@ -53,6 +64,31 @@ ask_choice() {
       return 0
     fi
     printf 'Enter a number between 1 and %d.\n' "${#opts[@]}" >&2
+  done
+}
+
+# ask_choice_def VARNAME PROMPT DEFAULT_IDX OPTION... — like ask_choice, but an
+# empty reply picks DEFAULT_IDX (1-based, marked with *). Custom mode uses this
+# so every picker pre-selects the recommendation (§9).
+ask_choice_def() {
+  local var="$1" prompt="$2" def="$3"
+  shift 3
+  local -a opts=("$@")
+  local i reply mark
+  while true; do
+    printf '%s\n' "$prompt" >&2
+    for i in "${!opts[@]}"; do
+      mark=" "
+      if [[ "$((i + 1))" == "$def" ]]; then mark="*"; fi
+      printf ' %s%d) %s\n' "$mark" "$((i + 1))" "${opts[i]}" >&2
+    done
+    read -r -p "> [${def}] " reply </dev/tty || reply=""
+    reply="${reply:-$def}"
+    if [[ "$reply" =~ ^[0-9]+$ ]] && ((reply >= 1 && reply <= ${#opts[@]})); then
+      printf -v "$var" '%s' "${opts[reply - 1]}"
+      return 0
+    fi
+    printf 'Enter a number between 1 and %d (empty = %s).\n' "${#opts[@]}" "$def" >&2
   done
 }
 

@@ -55,3 +55,24 @@ jobs:
           echo "$out" | grep -q "ID / version:    ${{ matrix.id }}"
           echo "$out" | grep -q "Family:          ${{ matrix.family }}"
           echo "$out" | grep -q "Supported:       yes"
+
+      - name: Dry-run express plan in ${{ matrix.image }}
+        run: |
+          out="$(docker run --rm -e DETECT_SKIP_NET=1 -v "$PWD:/w" -w /w \
+            "${{ matrix.image }}" bash dist/zbx-install.sh --dry-run --express --yes --no-color)"
+          echo "$out"
+          echo "$out" | grep -q "Plan summary (DRY-RUN)"
+          echo "$out" | grep -q "7.0 (LTS)"
+          echo "$out" | grep -q "zabbix-server-mysql"
+          echo "$out" | grep -q "zabbix-agent2"
+          echo "$out" | grep -q "auto-confirmed"
+          echo "$out" | grep -q "DRY-RUN: no commands were executed"
+
+      - name: No TTY without --yes exits 2 in ${{ matrix.image }}
+        run: |
+          set +e
+          docker run --rm -e DETECT_SKIP_NET=1 -v "$PWD:/w" -w /w \
+            "${{ matrix.image }}" bash dist/zbx-install.sh --dry-run --express --no-color
+          rc=$?
+          set -e
+          test "$rc" -eq 2

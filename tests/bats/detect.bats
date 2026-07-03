@@ -94,6 +94,13 @@ probe() {
   [ "$output" = "Debian GNU/Linux 12 (bookworm)" ]
 }
 
+@test "detect_hw honors the MEMINFO_FILE fixture override" {
+  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
+    MEMINFO_FILE="'"$FIX"'/meminfo.4gb"; detect_hw; printf "%s" "$DETECT_RAM_MB"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "4096" ]
+}
+
 @test "missing os-release file -> unknown, non-fatal" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
     OS_RELEASE_FILE="/nonexistent/os-release"; detect_os || true;

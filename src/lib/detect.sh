@@ -14,6 +14,9 @@
 # The one place the offered Zabbix versions live (§4). Adding 8.0 LTS later is a
 # one-line change here.
 readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4")
+# LTS marker for the recommendation engine (§9 rule 1). Kept adjacent to the
+# list above so a future 8.0 LTS update touches this one block only.
+readonly ZBX_LTS_VERSION="7.0"
 
 # --- DETECT_* defaults (keep set -u happy before/if a probe is skipped) ------
 DETECT_OS_ID="" DETECT_OS_LIKE="" DETECT_OS_VERSION="" DETECT_OS_MAJOR=""
@@ -23,7 +26,7 @@ DETECT_RAM_MB=0 DETECT_CPU=0 DETECT_DISK_VAR_GB=0 DETECT_DISK_ROOT_GB=0
 DETECT_DISK_WARN="no" DETECT_NET_OK="unknown" DETECT_ZBX_PRESENT="no"
 DETECT_DB_PRESENT="none" DETECT_WEB_PRESENT="none" DETECT_SELINUX="absent"
 DETECT_FIREWALL="none" DETECT_PORT_CONFLICTS="none" DETECT_VIRT="none"
-DETECT_IS_CONTAINER="no"
+DETECT_IS_CONTAINER="no" DETECT_FW_NOTE=""
 
 # --- OS release parsing (pure) ----------------------------------------------
 # _osr_get KEY FILE — echo the value of KEY, stripping surrounding quotes.
@@ -125,8 +128,11 @@ detect_arch() {
 
 # --- hardware / disk (host) --------------------------------------------------
 detect_hw() {
-  if [[ -r /proc/meminfo ]]; then
-    DETECT_RAM_MB="$(awk '/^MemTotal:/ {print int($2/1024); exit}' /proc/meminfo)"
+  # MEMINFO_FILE override exists for bats fixtures, same spirit as
+  # OS_RELEASE_FILE (§8).
+  local mi="${MEMINFO_FILE:-/proc/meminfo}"
+  if [[ -r "$mi" ]]; then
+    DETECT_RAM_MB="$(awk '/^MemTotal:/ {print int($2/1024); exit}' "$mi")"
   fi
   if command -v nproc >/dev/null 2>&1; then
     DETECT_CPU="$(nproc)"
@@ -216,6 +222,11 @@ detect_firewall() {
     DETECT_FIREWALL="ufw"
   else
     DETECT_FIREWALL="none"
+    # Ubuntu ships ufw installed but inactive — treat as none, mention it in
+    # the plan (§15.6).
+    if command -v ufw >/dev/null 2>&1; then
+      DETECT_FW_NOTE="ufw installed but inactive"
+    fi
   fi
 }
 
@@ -263,23 +274,15 @@ detect_run() {
   detect_firewall
   detect_ports
   detect_virt
+  # DETECT_NET_OK stays writable: the network error menu offers "retry", which
+  # re-runs detect_network (§8, §14).
   readonly DETECT_OS_ID DETECT_OS_LIKE DETECT_OS_VERSION DETECT_OS_MAJOR \
     DETECT_OS_NAME DETECT_FAMILY DETECT_SUPPORTED DETECT_PKGMGR DETECT_PKGMGR_OK \
     DETECT_ARCH DETECT_ARCH_OK DETECT_RAM_MB DETECT_CPU DETECT_DISK_VAR_GB \
-    DETECT_DISK_ROOT_GB DETECT_DISK_WARN DETECT_NET_OK DETECT_ZBX_PRESENT \
+    DETECT_DISK_ROOT_GB DETECT_DISK_WARN DETECT_ZBX_PRESENT \
     DETECT_DB_PRESENT DETECT_WEB_PRESENT DETECT_SELINUX DETECT_FIREWALL \
-    DETECT_PORT_CONFLICTS DETECT_VIRT DETECT_IS_CONTAINER
+    DETECT_PORT_CONFLICTS DETECT_VIRT DETECT_IS_CONTAINER DETECT_FW_NOTE
   log INFO "detected: ${DETECT_OS_ID} ${DETECT_OS_VERSION} (${DETECT_FAMILY}), pkgmgr=${DETECT_PKGMGR}, arch=${DETECT_ARCH}, supported=${DETECT_SUPPORTED}"
-}
-
-# _row LABEL VALUE [COLOR] — one aligned report line, optionally colored.
-_row() {
-  local color="${3:-}"
-  if [[ -n "$color" ]]; then
-    printf '  %-16s %s%s%s\n' "$1" "$color" "$2" "$C_RESET"
-  else
-    printf '  %-16s %s\n' "$1" "$2"
-  fi
 }
 
 detect_report() {
@@ -293,22 +296,22 @@ detect_report() {
   [[ "$DETECT_NET_OK" == "no" ]] && net_color="$C_RED"
 
   printf '%sEnvironment report%s\n' "$C_BOLD" "$C_RESET"
-  _row "OS:" "$DETECT_OS_NAME"
-  _row "ID / version:" "${DETECT_OS_ID} / ${DETECT_OS_VERSION}"
-  _row "Family:" "$DETECT_FAMILY"
-  _row "Supported:" "$DETECT_SUPPORTED" "$sup_color"
-  _row "Pkg manager:" "${DETECT_PKGMGR:-none} (ok=${DETECT_PKGMGR_OK})"
-  _row "Arch:" "${DETECT_ARCH} (ok=${DETECT_ARCH_OK})" "$arch_color"
-  _row "RAM / CPU:" "${DETECT_RAM_MB} MB / ${DETECT_CPU} vCPU"
-  _row "Disk /var,/:" "${DETECT_DISK_VAR_GB},${DETECT_DISK_ROOT_GB} GiB free" "$disk_color"
-  _row "Repo reachable:" "$DETECT_NET_OK" "$net_color"
-  _row "Existing Zabbix:" "$DETECT_ZBX_PRESENT"
-  _row "Existing DB:" "$DETECT_DB_PRESENT"
-  _row "Existing web:" "$DETECT_WEB_PRESENT"
-  _row "SELinux:" "$DETECT_SELINUX"
-  _row "Firewall:" "$DETECT_FIREWALL"
-  _row "Port conflicts:" "$DETECT_PORT_CONFLICTS"
-  _row "Virtualization:" "${DETECT_VIRT} (container=${DETECT_IS_CONTAINER})"
+  ui_row "OS:" "$DETECT_OS_NAME"
+  ui_row "ID / version:" "${DETECT_OS_ID} / ${DETECT_OS_VERSION}"
+  ui_row "Family:" "$DETECT_FAMILY"
+  ui_row "Supported:" "$DETECT_SUPPORTED" "$sup_color"
+  ui_row "Pkg manager:" "${DETECT_PKGMGR:-none} (ok=${DETECT_PKGMGR_OK})"
+  ui_row "Arch:" "${DETECT_ARCH} (ok=${DETECT_ARCH_OK})" "$arch_color"
+  ui_row "RAM / CPU:" "${DETECT_RAM_MB} MB / ${DETECT_CPU} vCPU"
+  ui_row "Disk /var,/:" "${DETECT_DISK_VAR_GB},${DETECT_DISK_ROOT_GB} GiB free" "$disk_color"
+  ui_row "Repo reachable:" "$DETECT_NET_OK" "$net_color"
+  ui_row "Existing Zabbix:" "$DETECT_ZBX_PRESENT"
+  ui_row "Existing DB:" "$DETECT_DB_PRESENT"
+  ui_row "Existing web:" "$DETECT_WEB_PRESENT"
+  ui_row "SELinux:" "$DETECT_SELINUX"
+  ui_row "Firewall:" "${DETECT_FIREWALL}${DETECT_FW_NOTE:+ — $DETECT_FW_NOTE}"
+  ui_row "Port conflicts:" "$DETECT_PORT_CONFLICTS"
+  ui_row "Virtualization:" "${DETECT_VIRT} (container=${DETECT_IS_CONTAINER})"
   printf '  %-16s %s\n' "Zabbix offered:" "${SUPPORTED_ZBX_VERSIONS[*]}"
 
   [[ "$DETECT_IS_CONTAINER" == "yes" ]] &&

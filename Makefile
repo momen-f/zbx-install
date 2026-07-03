@@ -26,7 +26,8 @@ fmt:
 	shfmt -d -i 2 -ci $(SH_SRC)
 
 # Unit tests. Force a >=4.2 bash onto PATH so associative arrays work.
-test:
+# Depends on build: cli.bats exercises the bundled artifact.
+test: build
 	PATH="$(BASH_DIR):$$PATH" bats tests/bats
 
 # Container smoke matrix: run --detect-only on each supported image (§16).
