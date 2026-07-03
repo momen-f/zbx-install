@@ -30,6 +30,38 @@ zx() {
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
+# zxn OSR MEM ARGS... — like zx but with the network probe live (no
+# DETECT_SKIP_NET), so the guard_network branches are reachable.
+zxn() {
+  local osr="$1" mem="$2"
+  shift 2
+  run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
+    OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" \
+    "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
+}
+
+# fake TOOL BODY — drop an executable fake into the tool farm (replaces the
+# real symlink if setup made one). Lets tests stub host probes: a fake
+# systemctl fabricates existing Zabbix units, a fake uname forces an arch,
+# a failing curl forces DETECT_NET_OK=no.
+fake() {
+  rm -f "$TOOLDIR/$1"
+  printf '#!%s\n%s\n' "$BASH_BIN" "$2" >"$TOOLDIR/$1"
+  chmod +x "$TOOLDIR/$1"
+}
+
+# row LABEL VALUE — assert one exact ui_row line (anchors both ends, so
+# "Components: agent" cannot pass on "server,frontend,agent").
+row() {
+  grep -qxF "$(printf '  %-16s %s' "$1" "$2")" <<<"$output"
+}
+
+# step N ID DESC_PREFIX — assert pipeline-preview step N (exact number + id
+# column, description prefix).
+step() {
+  grep -qF "$(printf '  %d. %-9s %s' "$1" "$2" "$3")" <<<"$output"
+}
+
 @test "express dry-run: ubuntu 24.04 / 4GiB -> full sane plan" {
   zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
   [ "$status" -eq 0 ]
@@ -43,6 +75,14 @@ zx() {
   [[ "$output" == *"Update system:"*"no"* ]]
   [[ "$output" == *"zabbix-server-mysql zabbix-sql-scripts zabbix-frontend-php zabbix-apache-conf zabbix-agent2 mariadb-server apache2"* ]]
   [[ "$output" == *"auto-confirmed"* ]]
+  # Pipeline preview: the full stack renders repo/packages/db/.../health in
+  # order (no update step, no firewall step — none active in the trimmed env).
+  step 1 repo "add the Zabbix 7.0 repository for ubuntu 24.04"
+  step 2 packages "install: zabbix-server-mysql"
+  step 3 db "provision mariadb, create zabbix DB/user, import schema"
+  step 4 config "render server/agent/web configs"
+  step 5 services "enable & start: DB -> zabbix-server -> web -> agent"
+  step 6 health "run the 9 post-install checks"
   [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
 }
 
@@ -63,7 +103,7 @@ zx() {
 @test "express dry-run: 1GiB RAM -> agent-only suggestion with warning" {
   zx os-release.debian12 meminfo.1gb --dry-run --express --yes
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Components:"*"agent"* ]]
+  row "Components:" "agent"
   [[ "$output" != *"zabbix-server-mysql"* ]]
   [[ "$output" == *"full stack not recommended"* ]]
 }
@@ -79,6 +119,28 @@ zx() {
   [[ "$output" == *"postgresql nginx"* ]]
   [[ "$output" == *"Update system:"*"yes"* ]]
   [[ "$output" == *"update"*"full system update"* ]]
+}
+
+@test "express dry-run: sles 15 SP5 -> supported, mariadb + apache2 plan" {
+  zx os-release.sles15sp5 meminfo.4gb --dry-run --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Plan summary (DRY-RUN)"* ]]
+  [[ "$output" == *"7.0 (LTS)"* ]]
+  row "Target OS:" "SUSE Linux Enterprise Server 15 SP5"
+  [[ "$output" == *"mariadb-server apache2"* ]]
+  [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
+}
+
+@test "agent-only dry-run: mode dispatch, Server IP row, agent-only packages" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --agent-only --yes
+  [ "$status" -eq 0 ]
+  row "Mode:" "agent-only"
+  row "Components:" "agent"
+  row "Server IP:" "127.0.0.1"
+  row "Packages:" "zabbix-agent2"
+  [[ "$output" != *"DB engine:"* ]]
+  [[ "$output" != *"provision"* ]]
+  [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
 }
 
 @test "overrides: --components agent skips db step in the pipeline" {
@@ -109,6 +171,86 @@ zx() {
   [ "$status" -eq 2 ]
   zx os-release.ubuntu2404 meminfo.4gb --express --detect-only
   [ "$status" -eq 2 ]
+}
+
+@test "value-taking flags with a missing value exit 2" {
+  zx os-release.ubuntu2404 meminfo.4gb --db
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Missing value for --db"* ]]
+  zx os-release.ubuntu2404 meminfo.4gb --zabbix-version
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Missing value for --zabbix-version"* ]]
+  zx os-release.ubuntu2404 meminfo.4gb --config
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Missing value for --config"* ]]
+  zx os-release.ubuntu2404 meminfo.4gb --creds-file
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Missing value for --creds-file"* ]]
+}
+
+@test "unknown option and stray positional argument exit 2" {
+  zx os-release.ubuntu2404 meminfo.4gb --bogus
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Unknown option: --bogus"* ]]
+  zx os-release.ubuntu2404 meminfo.4gb install
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Unexpected argument: install"* ]]
+}
+
+@test "mode flags are mutually exclusive in every combination" {
+  zx os-release.ubuntu2404 meminfo.4gb --agent-only --uninstall
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Modes are mutually exclusive"* ]]
+  zx os-release.ubuntu2404 meminfo.4gb --config /tmp/a.conf --express
+  [ "$status" -eq 2 ]
+  zx os-release.ubuntu2404 meminfo.4gb --detect-only --agent-only
+  [ "$status" -eq 2 ]
+}
+
+@test "credentials row reflects --generate-passwords and --creds-file" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes --generate-passwords
+  [ "$status" -eq 0 ]
+  row "Credentials:" "auto-generate; summary file: /root/zbx-install-credentials.txt"
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes --creds-file /tmp/creds.txt
+  [ "$status" -eq 0 ]
+  row "Credentials:" "prompt at install (Phase 4); summary file: /tmp/creds.txt"
+}
+
+@test "unattended existing-Zabbix guard exits 3 (fake systemctl reports units)" {
+  fake systemctl 'if [ "${1:-}" = list-unit-files ]; then echo "zabbix-server.service enabled"; exit 0; fi; exit 3'
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"existing Zabbix detected"* ]]
+}
+
+@test "unattended unsupported arch (armv7l) exits 3" {
+  fake uname 'echo armv7l'
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"unsupported architecture: armv7l"* ]]
+}
+
+@test "aarch64 (arch class maybe) continues with a repo-coverage warning" {
+  fake uname 'echo aarch64'
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"arch aarch64: Zabbix repo coverage varies"* ]]
+  [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
+}
+
+@test "network guard: unattended without dry-run exits 4 when curl fails" {
+  fake curl 'exit 1'
+  zxn os-release.ubuntu2404 meminfo.4gb --express --yes
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"cannot reach https://repo.zabbix.com/"* ]]
+}
+
+@test "network guard: dry-run continues with a warning when curl fails" {
+  fake curl 'exit 1'
+  zxn os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"repo.zabbix.com unreachable"* ]]
+  [[ "$output" == *"Plan summary (DRY-RUN)"* ]]
 }
 
 @test "--config stub exits 2 with a Phase 7 pointer" {
