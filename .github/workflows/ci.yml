@@ -90,3 +90,34 @@ jobs:
           test "$rc" -eq 2
           echo "$out" | grep -q "No TTY available"
           ! echo "$out" | grep -q "Plan summary"
+
+  # Phase 3 acceptance (SPEC §18): a REAL (non-dry-run) install of the repo +
+  # packages steps must succeed on Ubuntu 24.04 and Rocky 9. No DETECT_SKIP_NET
+  # here — this hits the real repo.zabbix.com over the network, on purpose.
+  real-install:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "ubuntu:24.04"
+            verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
+          - image: "rockylinux:9"
+            verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the bundle
+        run: ./build.sh
+
+      - name: Real express install (repo + packages), then verify, in ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w "${{ matrix.image }}" bash -c '
+            set -e
+            bash dist/zbx-install.sh --express --yes --no-color --log-file /var/log/zbx.log
+            echo "=== log tail ==="
+            tail -n 80 /var/log/zbx.log
+            echo "=== verifying installed packages ==="
+            ${{ matrix.verify }}
+          '

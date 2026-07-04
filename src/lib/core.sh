@@ -43,12 +43,12 @@ core_color_init() {
     enable=0
   fi
   if [[ "$enable" == "1" ]] && command -v tput >/dev/null 2>&1; then
-    C_RESET="$(tput sgr0)" C_RED="$(tput setaf 1)"
+    C_RESET="$(tput sgr0)" C_RED="$(tput setaf 1)" C_GREEN="$(tput setaf 2)"
     C_YELLOW="$(tput setaf 3)" C_BOLD="$(tput bold)"
   else
-    C_RESET="" C_RED="" C_YELLOW="" C_BOLD=""
+    C_RESET="" C_RED="" C_GREEN="" C_YELLOW="" C_BOLD=""
   fi
-  readonly C_RESET C_RED C_YELLOW C_BOLD
+  readonly C_RESET C_RED C_GREEN C_YELLOW C_BOLD
 }
 
 # --- secrets & redaction -----------------------------------------------------
@@ -119,11 +119,14 @@ run() {
 
 # --- state file --------------------------------------------------------------
 core_state_init() {
-  local dir
-  dir="$(dirname "$STATE_FILE")"
-  if [[ "$DRY_RUN" == "1" ]]; then return 0; fi
-  mkdir -p "$dir" 2>/dev/null || true
-  [[ -f "$STATE_FILE" ]] || : >"$STATE_FILE" 2>/dev/null || true
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  local dir="${STATE_FILE%/*}"
+  mkdir -p "$dir" >/dev/null 2>&1 || true
+  # Grouped so 2>/dev/null covers the redirection itself, not just the
+  # command before it — an unwritable path (e.g. no root) is degraded
+  # resume support, never a fatal error (§14 principle: never crash the
+  # install over a nice-to-have).
+  { [[ -f "$STATE_FILE" ]] || : >"$STATE_FILE"; } 2>/dev/null || true
 }
 
 # Mark a pipeline STEP_ID complete (idempotent).
@@ -131,7 +134,7 @@ state_mark_done() {
   local step="$1"
   [[ "$DRY_RUN" == "1" ]] && return 0
   core_state_is_done "$step" && return 0
-  printf '%s=done\n' "$step" >>"$STATE_FILE"
+  { printf '%s=done\n' "$step" >>"$STATE_FILE"; } 2>/dev/null || true
 }
 
 core_state_is_done() {
@@ -167,6 +170,29 @@ die() {
   exit "$code"
 }
 
+# _errmenu_opts_for STEP — which letters are enabled for this step's menu, per
+# the §14 per-context table (Exit is implicit and always available). Unlisted
+# steps get the generic fallback. v (pick a different Zabbix version) and
+# s (skip) are step-specific: skip must never appear for repo/packages/db
+# (§14: "never" — a half-installed repo or package set can't be skipped over).
+_errmenu_opts_for() {
+  case "$1" in
+    repo) echo "rvl" ;;
+    packages) echo "rl" ;;
+    *) echo "rlsb" ;;
+  esac
+}
+
+_errmenu_print_options() {
+  local opts="$1" line=""
+  [[ "$opts" == *r* ]] && line+="[r] Retry  "
+  [[ "$opts" == *v* ]] && line+="[v] Pick a different Zabbix version  "
+  [[ "$opts" == *l* ]] && line+="[l] View log (last 50)  "
+  [[ "$opts" == *s* ]] && line+="[s] Skip*  "
+  [[ "$opts" == *b* ]] && line+="[b] Back to plan  "
+  printf '%s[x] Exit\n' "$line"
+}
+
 # err_menu STEP_ID REASON — every interactive failure lands here. Returns one of
 # ERRMENU_RETRY/SKIP/BACK, loops on "view log", and only exits on explicit Exit.
 # Unattended mode fails fast via die() with the step's code.
@@ -180,7 +206,8 @@ err_menu() {
   fi
 
   ZBX_RETRY_COUNT["$step"]=$((${ZBX_RETRY_COUNT["$step"]:-0} + 1))
-  local choice
+  local opts choice
+  opts="$(_errmenu_opts_for "$step")"
   while true; do
     printf '\n%s✗ %s failed — %s%s\n' "$C_RED" "$step" "$reason" "$C_RESET" >&2
     core_tail_log 5 >&2
@@ -188,21 +215,38 @@ err_menu() {
       printf '%shint: see %s and SPEC §15 for this step%s\n' \
         "$C_YELLOW" "$LOG_FILE" "$C_RESET" >&2
     fi
-    printf '[r] Retry  [l] View log  [s] Skip*  [b] Back to plan  [x] Exit\n' >&2
+    _errmenu_print_options "$opts" >&2
     read -r -p '> ' choice </dev/tty || choice=x
     case "$choice" in
-      r | R) return "$ERRMENU_RETRY" ;;
-      l | L) core_tail_log 50 >&2 ;;
+      r | R)
+        [[ "$opts" == *r* ]] || continue
+        return "$ERRMENU_RETRY"
+        ;;
+      v | V)
+        [[ "$opts" == *v* ]] || continue
+        ask_choice_def PLAN_ZBX_VERSION "Pick a Zabbix version to retry with" 1 \
+          "${SUPPORTED_ZBX_VERSIONS[@]}"
+        log INFO "user switched to Zabbix version $PLAN_ZBX_VERSION for the retry"
+        return "$ERRMENU_RETRY"
+        ;;
+      l | L)
+        [[ "$opts" == *l* ]] || continue
+        core_tail_log 50 >&2
+        ;;
       s | S)
+        [[ "$opts" == *s* ]] || continue
         log WARN "step '$step' skipped by user (degraded)"
         return "$ERRMENU_SKIP"
         ;;
-      b | B) return "$ERRMENU_BACK" ;;
+      b | B)
+        [[ "$opts" == *b* ]] || continue
+        return "$ERRMENU_BACK"
+        ;;
       x | X)
         read -r -p 'Exit installer? [y/N] ' confirm </dev/tty || confirm=y
         [[ "$confirm" =~ ^[Yy]$ ]] && exit "$code"
         ;;
-      *) printf 'Please choose r, l, s, b, or x.\n' >&2 ;;
+      *) : ;;
     esac
   done
 }

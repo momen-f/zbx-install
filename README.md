@@ -9,7 +9,9 @@ curl -fsSL https://raw.githubusercontent.com/<org>/zbx-install/main/install.sh |
 > **Status:** early development. Build proceeds phase by phase — see
 > [SPEC.md](SPEC.md) §18. Done: Phase 0 (scaffold, core, UI, build, CI),
 > Phase 1 (detection, `--detect-only`), Phase 2 (recommendation engine, modes,
-> plan summary, confirm — `--dry-run --express --yes` renders the full plan).
+> plan summary, confirm), Phase 3 (repo setup + real package install via
+> `repo.sh`/`pkg.sh` — `--express --yes` now genuinely installs Zabbix's
+> packages; DB/config/firewall/services/health still land in later phases).
 
 ## Development
 

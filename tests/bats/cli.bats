@@ -15,16 +15,33 @@ setup() {
   TOOLDIR="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$TOOLDIR"
   local t src
-  for t in date awk sed grep df uname head tail tr cut cat sleep tput; do
+  for t in date awk sed grep df uname head tail tr cut cat sleep tput wc mktemp; do
     src="$(command -v "$t" 2>/dev/null || true)"
     if [[ -n "$src" ]]; then ln -sf "$src" "$TOOLDIR/$t"; fi
   done
 }
 
+# _pkgmgr_fake_for OSR — the package manager a real host with this fixture
+# would have on PATH. A trimmed test harness has none of apt-get/dnf/zypper
+# (unlike a real target), so repo.sh/pkg.sh's DETECT_PKGMGR dispatch needs a
+# stub present to reach their (DRY_RUN no-op) success path at all.
+_pkgmgr_fake_for() {
+  case "$1" in
+    *ubuntu* | *debian* | *mint*) echo apt-get ;;
+    *rocky* | *alma* | *rhel* | *centos* | *fedora*) echo dnf ;;
+    *sles* | *leap*) echo zypper ;;
+    *) echo "" ;;
+  esac
+}
+
 # zx OSR MEM ARGS... — run the bundle in the trimmed environment.
 zx() {
-  local osr="$1" mem="$2"
+  local osr="$1" mem="$2" pm
   shift 2
+  pm="$(_pkgmgr_fake_for "$osr")"
+  # Only auto-fake if the test didn't already drop its own fake for this
+  # binary (e.g. a recording fake) — never clobber a test's own setup.
+  [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" DETECT_SKIP_NET=1 \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
@@ -33,8 +50,12 @@ zx() {
 # zxn OSR MEM ARGS... — like zx but with the network probe live (no
 # DETECT_SKIP_NET), so the guard_network branches are reachable.
 zxn() {
-  local osr="$1" mem="$2"
+  local osr="$1" mem="$2" pm
   shift 2
+  pm="$(_pkgmgr_fake_for "$osr")"
+  # Only auto-fake if the test didn't already drop its own fake for this
+  # binary (e.g. a recording fake) — never clobber a test's own setup.
+  [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
@@ -148,6 +169,58 @@ step() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Components:"*"agent"* ]]
   [[ "$output" != *"provision"* ]]
+}
+
+# --- real (non-dry-run) repo+package execution, verified via recording fakes ---
+# These exercise the ACTUAL command construction (not just dry-run text) by
+# faking curl/dpkg/apt-get/apt-cache to record their argv and succeed, so the
+# real repo_install/pkg_install code paths run for real without touching the
+# network or a real package manager.
+@test "real run: the resolved Zabbix repo URL is actually fetched" {
+  fake curl 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/curl.log"; exit 0'
+  fake dpkg 'exit 0'
+  fake apt-get 'exit 0'
+  fake apt-cache 'exit 0'
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes
+  [ "$status" -eq 0 ]
+  run cat "$BATS_TEST_TMPDIR/curl.log"
+  [[ "$output" == *"https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu24.04_all.deb"* ]]
+}
+
+@test "real run: apt-get install receives the exact planned package list" {
+  fake curl 'exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget.log"; exit 0'
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes
+  [ "$status" -eq 0 ]
+  run grep '^install -y' "$BATS_TEST_TMPDIR/aptget.log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"zabbix-server-mysql"* ]]
+  [[ "$output" == *"zabbix-sql-scripts"* ]]
+  [[ "$output" == *"zabbix-frontend-php"* ]]
+  [[ "$output" == *"zabbix-apache-conf"* ]]
+  [[ "$output" == *"zabbix-agent2"* ]]
+  [[ "$output" == *"mariadb-server"* ]]
+  [[ "$output" == *"apache2"* ]]
+}
+
+@test "real run: a failing package transaction reaches the packages error menu and exits 5 unattended" {
+  fake curl 'exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  # apt-get update (repo_install) must still succeed; only install (pkg_install) fails.
+  fake apt-get 'case "$1" in install) exit 1 ;; *) exit 0 ;; esac'
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"package transaction failed"* ]]
+}
+
+@test "real run: a repo probe failure exits 5 unattended with a repo-context message" {
+  fake curl 'exit 1'
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"step 'repo' failed"* ]]
 }
 
 @test "detect-only still works and reports supported" {

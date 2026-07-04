@@ -19,6 +19,10 @@ source "$_SRC_DIR/lib/ui.sh" # @dev-source
 source "$_SRC_DIR/lib/detect.sh" # @dev-source
 # shellcheck source=lib/recommend.sh
 source "$_SRC_DIR/lib/recommend.sh" # @dev-source
+# shellcheck source=lib/repo.sh
+source "$_SRC_DIR/lib/repo.sh" # @dev-source
+# shellcheck source=lib/pkg.sh
+source "$_SRC_DIR/lib/pkg.sh" # @dev-source
 
 # Version/date: injected by build.sh; fall back to the VERSION file in dev.
 main_version() {
@@ -459,6 +463,29 @@ plan_confirm() {
   ask_yn "Proceed with this plan?" n
 }
 
+# run_pipeline — execute the steps this build actually implements (update,
+# repo, packages — Phase 3). Later phases (DB, config, firewall, services,
+# health) only ever appear in plan_pipeline_preview until their own phase
+# lands; run() itself no-ops-and-prints every real command under DRY_RUN, so
+# this is safe to call unconditionally and doubles as the detailed dry-run
+# preview for the steps it covers.
+run_pipeline() {
+  core_state_init
+  local label="Running the implemented steps (repo, packages)"
+  [[ "$DRY_RUN" == "1" ]] && label+=" — dry-run"
+  printf '\n%s%s%s\n' "$C_BOLD" "$label" "$C_RESET"
+  pkg_update
+  repo_install
+  local -a pkgs=()
+  IFS=' ' read -ra pkgs <<<"$PLAN_PACKAGES"
+  pkg_install "${pkgs[@]}"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    printf '\n%sRepo and packages installed.%s DB provisioning, config, firewall,\n' \
+      "$C_GREEN" "$C_RESET"
+    printf 'services, and health checks are not implemented yet (SPEC §18 Phases 4-6).\n'
+  fi
+}
+
 main_flow() {
   local m
   while true; do
@@ -473,7 +500,8 @@ main_flow() {
     plan_report "$m"
     if plan_confirm; then
       plan_pipeline_preview
-      log INFO "plan confirmed (mode=$m) — pipeline execution lands in Phases 3-6"
+      log INFO "plan confirmed (mode=$m)"
+      run_pipeline
       return 0
     fi
     log INFO "plan rejected — returning to the mode menu (flowchart: confirm->no->mode)"
