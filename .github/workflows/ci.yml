@@ -71,11 +71,13 @@ jobs:
       - name: No TTY without --yes exits 2 in ${{ matrix.image }}
         run: |
           set +e
-          docker run --rm -e DETECT_SKIP_NET=1 -v "$PWD:/w" -w /w \
-            "${{ matrix.image }}" bash dist/zbx-install.sh --dry-run --express --no-color
+          out="$(docker run --rm -e DETECT_SKIP_NET=1 -v "$PWD:/w" -w /w \
+            "${{ matrix.image }}" bash dist/zbx-install.sh --dry-run --express --no-color 2>&1)"
           rc=$?
           set -e
+          echo "$out"
           test "$rc" -eq 2
+          echo "$out" | grep -q "No TTY available"
 
       - name: No TTY + bare --yes (no mode) exits 2, never silently installs, in ${{ matrix.image }}
         run: |
