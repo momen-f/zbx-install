@@ -146,6 +146,54 @@ rprobe() {
   [ "$output" = "zabbix-server-mysql zabbix-sql-scripts zabbix-frontend-php zabbix-apache-conf zabbix-agent2" ]
 }
 
+# --- plan_report firewall line (regression: was always "none active") -----------
+@test "plan_report firewall line: active firewall the user declined is not called 'none active'" {
+  rprobe 'USE_COLOR=0; core_color_init;
+    DETECT_FIREWALL=firewalld PLAN_OPEN_FIREWALL=no;
+    if [[ "$PLAN_OPEN_FIREWALL" == "yes" ]]; then echo open;
+    elif [[ "$DETECT_FIREWALL" != "none" ]]; then echo "active-declined:$DETECT_FIREWALL";
+    else echo "none-active"; fi'
+  [ "$output" = "active-declined:firewalld" ]
+}
+
+@test "plan_report firewall line: genuinely no firewall still says none active" {
+  rprobe 'USE_COLOR=0; core_color_init;
+    DETECT_FIREWALL=none PLAN_OPEN_FIREWALL=no;
+    if [[ "$PLAN_OPEN_FIREWALL" == "yes" ]]; then echo open;
+    elif [[ "$DETECT_FIREWALL" != "none" ]]; then echo "active-declined:$DETECT_FIREWALL";
+    else echo "none-active"; fi'
+  [ "$output" = "none-active" ]
+}
+
+# --- plan_port_warnings: 3306/5432 (regression: were never scanned/filtered) -----
+@test "plan_port_warnings: warns on 3306 only for a new mariadb/mysql install" {
+  rprobe 'USE_COLOR=0; core_color_init;
+    DETECT_PORT_CONFLICTS=3306 PLAN_COMPONENTS=server,agent PLAN_DB_ENGINE=mariadb DETECT_DB_PRESENT=none;
+    plan_port_warnings'
+  [[ "$output" == *"port 3306 already in use"* ]]
+}
+
+@test "plan_port_warnings: no 3306 warning when mariadb is already installed" {
+  rprobe 'USE_COLOR=0; core_color_init;
+    DETECT_PORT_CONFLICTS=3306 PLAN_COMPONENTS=server,agent PLAN_DB_ENGINE=mariadb DETECT_DB_PRESENT=mariadb;
+    plan_port_warnings'
+  [ "$output" = "" ]
+}
+
+@test "plan_port_warnings: warns on 5432 only for a new pgsql install" {
+  rprobe 'USE_COLOR=0; core_color_init;
+    DETECT_PORT_CONFLICTS=5432 PLAN_COMPONENTS=server,agent PLAN_DB_ENGINE=pgsql DETECT_DB_PRESENT=none;
+    plan_port_warnings'
+  [[ "$output" == *"port 5432 already in use"* ]]
+}
+
+@test "plan_port_warnings: 3306 conflict irrelevant to a pgsql plan is silent" {
+  rprobe 'USE_COLOR=0; core_color_init;
+    DETECT_PORT_CONFLICTS=3306 PLAN_COMPONENTS=server,agent PLAN_DB_ENGINE=pgsql DETECT_DB_PRESENT=none;
+    plan_port_warnings'
+  [ "$output" = "" ]
+}
+
 @test "plan_packages: nginx frontend, agent2 plugins, tools" {
   rprobe 'DETECT_FAMILY=suse DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=none DETECT_SELINUX=absent;
     PLAN_COMPONENTS=frontend,agent PLAN_DB_ENGINE=mariadb PLAN_WEB_SERVER=nginx;

@@ -284,6 +284,10 @@ plan_report() {
   ui_row "Update system:" "${PLAN_UPDATE:-no}"
   if [[ "$PLAN_OPEN_FIREWALL" == "yes" ]]; then
     ui_row "Firewall:" "open 10050,10051,80,443 via $DETECT_FIREWALL"
+  elif [[ "$DETECT_FIREWALL" != "none" ]]; then
+    # PLAN_OPEN_FIREWALL=no here means the user declined in the custom picker
+    # — the firewall is still active and may be blocking the needed ports.
+    ui_row "Firewall:" "no action — $DETECT_FIREWALL active but left as-is; needed ports: 10050,10051,80,443" "$C_YELLOW"
   else
     ui_row "Firewall:" "no action — none active${DETECT_FW_NOTE:+ ($DETECT_FW_NOTE)}; needed ports: 10050,10051,80,443"
   fi
@@ -335,6 +339,19 @@ plan_port_warnings() {
       10051) if plan_has server; then _plan_warn "port 10051 already in use — zabbix-server will not bind"; fi ;;
       10050) if plan_has agent; then _plan_warn "port 10050 already in use — the agent will not bind"; fi ;;
       80 | 443) if plan_has frontend; then _plan_warn "port $p already in use — check the web server vhost"; fi ;;
+      3306)
+        # §8: only relevant when that engine is newly installed by this plan.
+        if plan_has server && [[ "$PLAN_DB_ENGINE" != "pgsql" ]] &&
+          [[ ",$DETECT_DB_PRESENT," != *",$PLAN_DB_ENGINE,"* ]]; then
+          _plan_warn "port 3306 already in use — new $PLAN_DB_ENGINE install may fail to bind"
+        fi
+        ;;
+      5432)
+        if plan_has server && [[ "$PLAN_DB_ENGINE" == "pgsql" ]] &&
+          [[ ",$DETECT_DB_PRESENT," != *",pgsql,"* ]]; then
+          _plan_warn "port 5432 already in use — new PostgreSQL install may fail to bind"
+        fi
+        ;;
     esac
   done
 }

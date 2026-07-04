@@ -92,26 +92,39 @@ ask_choice_def() {
   done
 }
 
-# ask_multi VARNAME PROMPT OPTION... — multi-select; sets VARNAME to a
-# comma-separated list of chosen options. Empty selection is allowed.
-ask_multi() {
-  local var="$1" prompt="$2"
-  shift 2
-  local -a opts=("$@")
-  local i reply tok
-  local -a chosen=()
-  printf '%s (space/comma-separated numbers, empty = none)\n' "$prompt" >&2
-  for i in "${!opts[@]}"; do
-    printf '  %d) %s\n' "$((i + 1))" "${opts[i]}" >&2
-  done
-  read -r -p '> ' reply </dev/tty || reply=""
+# _ask_multi_tokens REPLY OPTION... — pure: echo the comma-joined subset of
+# OPTIONs picked by REPLY's space/comma-separated 1-based indices. Split out
+# from ask_multi so the tokenizing logic is unit-testable without /dev/tty.
+_ask_multi_tokens() {
+  local reply="$1" tok
+  shift
+  local -a opts=("$@") chosen=()
+  # Global IFS is $'\n\t' (core.sh) — it has no space, so this unquoted
+  # expansion would not split on the spaces just substituted for commas,
+  # collapsing "1 2" into a single non-numeric token that never matches.
+  local IFS=' '
   for tok in ${reply//,/ }; do
     if [[ "$tok" =~ ^[0-9]+$ ]] && ((tok >= 1 && tok <= ${#opts[@]})); then
       chosen+=("${opts[tok - 1]}")
     fi
   done
   local IFS=,
-  printf -v "$var" '%s' "${chosen[*]:-}"
+  printf '%s' "${chosen[*]:-}"
+}
+
+# ask_multi VARNAME PROMPT OPTION... — multi-select; sets VARNAME to a
+# comma-separated list of chosen options. Empty selection is allowed.
+ask_multi() {
+  local var="$1" prompt="$2"
+  shift 2
+  local -a opts=("$@")
+  local i reply
+  printf '%s (space/comma-separated numbers, empty = none)\n' "$prompt" >&2
+  for i in "${!opts[@]}"; do
+    printf '  %d) %s\n' "$((i + 1))" "${opts[i]}" >&2
+  done
+  read -r -p '> ' reply </dev/tty || reply=""
+  printf -v "$var" '%s' "$(_ask_multi_tokens "$reply" "${opts[@]}")"
 }
 
 # ask_secret VARNAME LABEL [USERNAME] — hidden double-entry, min 12 chars, must

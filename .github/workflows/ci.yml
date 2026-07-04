@@ -76,3 +76,15 @@ jobs:
           rc=$?
           set -e
           test "$rc" -eq 2
+
+      - name: No TTY + bare --yes (no mode) exits 2, never silently installs, in ${{ matrix.image }}
+        run: |
+          set +e
+          out="$(docker run --rm -e DETECT_SKIP_NET=1 -v "$PWD:/w" -w /w \
+            "${{ matrix.image }}" bash dist/zbx-install.sh --yes --dry-run --no-color 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          test "$rc" -eq 2
+          echo "$out" | grep -q "No TTY available"
+          ! echo "$out" | grep -q "Plan summary"

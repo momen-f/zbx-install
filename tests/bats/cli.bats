@@ -100,6 +100,31 @@ zx() {
   [ "$status" -eq 3 ]
 }
 
+# Regression test for a confirmed Phase 2 bug: guard_tty's [[ -r/-w /dev/tty ]]
+# fallback only checks permission bits on the special file — true even with NO
+# controlling terminal at all — so a genuinely headless `--yes` (no --express/
+# --config) silently fell through to the interactive mode menu, whose failed
+# /dev/tty read then defaulted to option 1 (express) and "confirmed" via
+# --yes, installing unattended without ever hitting the required exit 2 (§6.2).
+# setsid actually detaches the controlling terminal, unlike closing stdin.
+@test "headless bare --yes (no mode flag, no TTY) exits 2, never silently installs" {
+  command -v setsid >/dev/null 2>&1 || skip "no setsid on this platform"
+  local rcfile="$BATS_TEST_TMPDIR/rc"
+  setsid bash -c '
+    env -i PATH="'"$TOOLDIR"'" OS_RELEASE_FILE="'"$FIX"'/os-release.ubuntu2404" \
+      MEMINFO_FILE="'"$FIX"'/meminfo.4gb" DETECT_SKIP_NET=1 \
+      "'"$BASH_BIN"'" "'"$DIST"'" --yes --dry-run --no-color \
+      --log-file "'"$BATS_TEST_TMPDIR"'/zbx-headless.log" \
+      >"'"$BATS_TEST_TMPDIR"'/out" 2>&1 </dev/null
+    echo $? >"'"$rcfile"'"
+  ' </dev/null
+  run cat "$rcfile"
+  [ "$output" = "2" ]
+  run cat "$BATS_TEST_TMPDIR/out"
+  [[ "$output" == *"No TTY available"* ]]
+  [[ "$output" != *"Plan summary"* ]]
+}
+
 @test "usage errors exit 2" {
   zx os-release.ubuntu2404 meminfo.4gb --db oracle
   [ "$status" -eq 2 ]

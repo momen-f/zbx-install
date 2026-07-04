@@ -25,7 +25,7 @@ main_version() {
   if [[ -n "${ZBX_BUILD_VERSION:-}" ]]; then
     printf '%s (built %s)\n' "$ZBX_BUILD_VERSION" "${ZBX_BUILD_DATE:-?}"
   elif [[ -f "${_SRC_DIR:-.}/../VERSION" ]]; then
-    printf '%s (dev)\n' "$(cat "${_SRC_DIR}/../VERSION")"
+    printf '%s (dev)\n' "$(cat "${_SRC_DIR:-.}/../VERSION")"
   else
     printf 'unknown (dev)\n'
   fi
@@ -165,12 +165,20 @@ parse_args() {
 }
 
 # --- guards (run before any recommendation) ----------------------------------
-# guard_tty — prompts are impossible without a TTY; unattended runs need none.
-# The one sanctioned self-exit in interactive mode (§6.2).
+# guard_tty — prompts are impossible without a TTY. The one sanctioned
+# self-exit in interactive mode (§6.2). §6.2 requires an explicit mode
+# (--config or --express; we also allow --agent-only, which likewise needs
+# zero prompts under --yes) together with --yes — bare --yes still falls
+# through to the interactive mode_menu, which needs a real TTY, so it must
+# NOT bypass this guard (a failed /dev/tty read there would otherwise default
+# silently to option 1 and install unattended without ever exiting 2).
 guard_tty() {
-  if [[ "$UNATTENDED" == "1" ]]; then return 0; fi
   if [[ -t 0 ]]; then return 0; fi
-  if [[ -r /dev/tty && -w /dev/tty ]]; then return 0; fi
+  # [[ -r/-w /dev/tty ]] only checks permission bits on the special file and
+  # is true even with no controlling terminal at all — an actual open attempt
+  # is the only reliable test.
+  if { : </dev/tty; } 2>/dev/null; then return 0; fi
+  if [[ "$UNATTENDED" == "1" && "$MODE" != "interactive" ]]; then return 0; fi
   return 1
 }
 
@@ -182,10 +190,19 @@ guard_supported() {
     die "unsupported OS: ${DETECT_OS_ID} ${DETECT_OS_VERSION} (see the report above)" 3
   fi
   if [[ "$DETECT_FAMILY" == "unknown" ]]; then
-    printf '%s✗ %s %s is unsupported and matches no known family (§4).%s\n' \
-      "$C_RED" "$DETECT_OS_ID" "$DETECT_OS_VERSION" "$C_RESET" >&2
-    read -r -p 'Press Enter to exit (3). ' _ </dev/tty || true
-    exit 3
+    # No "force family" is possible here (there is no family to force to), but
+    # the no-exit policy (§3/§14) still applies: offer a real action and only
+    # exit after an explicit confirmation, never a bare read-then-exit.
+    local choice
+    while true; do
+      ask_choice choice "${DETECT_OS_ID} ${DETECT_OS_VERSION} is unsupported and matches no known family (§4). Choose:" \
+        "show the detection report again" \
+        "exit the installer (3)"
+      case "$choice" in
+        show*) detect_report ;;
+        exit*) if ask_yn "Exit installer?" n; then exit 3; fi ;;
+      esac
+    done
   fi
   if ask_yn "Unsupported OS. Force closest family '${DETECT_FAMILY}' (best effort)?" n; then
     log WARN "user forced family=${DETECT_FAMILY} on unsupported ${DETECT_OS_ID} ${DETECT_OS_VERSION}"
@@ -207,8 +224,18 @@ guard_arch() {
   if [[ "$UNATTENDED" == "1" ]]; then
     die "unsupported architecture: ${DETECT_ARCH}" 3
   fi
-  read -r -p 'Unsupported architecture. Press Enter to exit (3). ' _ </dev/tty || true
-  exit 3
+  # No force option (an architecture cannot be "forced" the way an OS family
+  # can); still must not bare-exit — offer the report and require confirm.
+  local choice
+  while true; do
+    ask_choice choice "Architecture ${DETECT_ARCH} is not supported (§4). Choose:" \
+      "show the detection report again" \
+      "exit the installer (3)"
+    case "$choice" in
+      show*) detect_report ;;
+      exit*) if ask_yn "Exit installer?" n; then exit 3; fi ;;
+    esac
+  done
 }
 
 # guard_existing — never upgrade in v1; repair/uninstall land in Phase 7 (§8).

@@ -236,7 +236,10 @@ detect_ports() {
     return 0
   fi
   local conflicts=() p
-  for p in 80 443 10050 10051; do
+  # 3306/5432 are always scanned (cheap); §8 only wants a warning surfaced
+  # when that DB engine is actually being newly installed, which is decided
+  # later (recommend.sh) — plan_port_warnings does that filtering.
+  for p in 80 443 10050 10051 3306 5432; do
     if ss -ltnH "sport = :$p" 2>/dev/null | grep -q .; then
       conflicts+=("$p")
     fi
