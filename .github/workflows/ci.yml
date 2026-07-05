@@ -179,12 +179,6 @@ jobs:
             cat /tmp/install.out
             echo "=== log tail (always shown) ==="
             tail -n 120 /var/log/zbx.log || true
-            echo "=== diagnostic: service status + journal (always shown, temporary) ==="
-            for u in httpd apache2 php-fpm zabbix-server zabbix-agent2 mariadb; do
-              echo "--- $u ---"
-              systemctl status "$u" --no-pager -l 2>&1 || true
-              journalctl -u "$u" -n 40 --no-pager 2>&1 || true
-            done
             test "$rc" -eq 0
             echo "=== verifying installed packages ==="
             ${{ matrix.verify }}

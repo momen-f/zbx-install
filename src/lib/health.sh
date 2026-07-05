@@ -26,10 +26,33 @@ _health_record() {
   ZBX_HEALTH_RESULTS+=("$1|$2|$3")
 }
 
+# Not readonly, and respects a pre-set value — same convention as
+# ZBX_ETC_DIR/OS_RELEASE_FILE, here so bats can set it to 0 (checks exactly
+# once, no delay) instead of eating the real grace period on every "fails"
+# test. Real value: services.sh already waited up to 15s per unit before
+# this step even starts, but a unit can still land in a fleeting
+# "activating" window a moment later — observed for real in CI's
+# containerized systemd (httpd took ~1-2s past its own "Started" log line to
+# report is-active), and a first boot on a real target can plausibly hit the
+# same brief gap, so this is a genuine robustness fix, not a CI-only patch.
+: "${ZBX_HEALTH_SERVICE_RETRY_SECONDS:=5}"
+
+# _health_wait_active UNIT — poll is-active for up to
+# ZBX_HEALTH_SERVICE_RETRY_SECONDS, always checking at least once.
+_health_wait_active() {
+  local unit="$1" waited=0
+  while true; do
+    systemctl is-active --quiet "$unit" 2>/dev/null && return 0
+    ((waited >= ZBX_HEALTH_SERVICE_RETRY_SECONDS)) && return 1
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
 # --- individual checks (§13 table) ----------------------------------------------
 
 _health_check_server_service() {
-  if systemctl is-active --quiet zabbix-server 2>/dev/null; then
+  if _health_wait_active zabbix-server; then
     _health_record "zabbix-server service" 0 ""
   else
     _health_record "zabbix-server service" 1 "journalctl -u zabbix-server -n 50"
@@ -39,7 +62,7 @@ _health_check_server_service() {
 _health_check_agent_service() {
   local unit="zabbix-agent2"
   [[ "$PLAN_AGENT_TYPE" == "zabbix-agent2" ]] || unit="zabbix-agent"
-  if systemctl is-active --quiet "$unit" 2>/dev/null; then
+  if _health_wait_active "$unit"; then
     _health_record "$unit service" 0 ""
   else
     _health_record "$unit service" 1 "journalctl -u $unit -n 50"
@@ -54,7 +77,7 @@ _health_check_web_service() {
   local -a failed=()
   local u
   for u in "${units[@]}"; do
-    systemctl is-active --quiet "$u" 2>/dev/null || failed+=("$u")
+    _health_wait_active "$u" || failed+=("$u")
   done
   if ((${#failed[@]} == 0)); then
     _health_record "web service (${units[*]})" 0 ""

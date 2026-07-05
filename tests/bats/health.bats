@@ -12,6 +12,13 @@ DBP="${BATS_TEST_DIRNAME}/../../src/lib/db_pgsql.sh"
 SERVICES="${BATS_TEST_DIRNAME}/../../src/lib/services.sh"
 HEALTH="${BATS_TEST_DIRNAME}/../../src/lib/health.sh"
 
+# _health_wait_active's real grace period (§13, added after a real CI-only
+# timing race — see health.sh's own comment) would make every "fails" test
+# below eat several real seconds for no reason; 0 still checks exactly once.
+setup() {
+  export ZBX_HEALTH_SERVICE_RETRY_SECONDS=0
+}
+
 hprobe() {
   run bash -c 'source "'"$CORE"'"; source "'"$UI"'"; source "'"$RECOMMEND"'"; source "'"$CONFIG"'"; source "'"$DBM"'"; source "'"$DBP"'"; source "'"$SERVICES"'"; source "'"$HEALTH"'"; '"$1"
 }
@@ -24,6 +31,19 @@ fake_tool() {
 }
 
 # --- individual checks -------------------------------------------------------------
+
+# Regression test for the real CI timing race this grace period exists for
+# (see health.sh's own comment): a unit that reports inactive on the first
+# check or two but active shortly after must still pass, not fail outright.
+@test "_health_wait_active retries within its window instead of failing on the first check" {
+  local d="$BATS_TEST_TMPDIR/t0" counter="$BATS_TEST_TMPDIR/t0-count"
+  : >"$counter"
+  fake_tool "$d" systemctl 'echo x >>"'"$counter"'"
+    n=$(wc -l <"'"$counter"'")
+    if [ "$n" -ge 3 ]; then exit 0; else exit 3; fi'
+  hprobe 'PATH="'"$d"':$PATH" ZBX_HEALTH_SERVICE_RETRY_SECONDS=3; _health_wait_active zabbix-server'
+  [ "$status" -eq 0 ]
+}
 
 @test "_health_check_server_service passes when systemctl reports active" {
   local d="$BATS_TEST_TMPDIR/t1"
