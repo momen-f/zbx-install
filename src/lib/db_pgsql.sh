@@ -94,9 +94,15 @@ _db_pgsql_pgpass_file() {
 }
 
 # --- schema import (§12.3 point 3) ----------------------------------------------
+# _db_pgsql_schema_present — true only when the users table genuinely has
+# rows (§13 check 7: "SELECT COUNT(*) FROM users >= 1"), not merely when the
+# query succeeds — an empty (but existing) table must still count as absent,
+# for both the import resume-guard below and health.sh's own check 7.
 _db_pgsql_schema_present() {
   [[ "$DRY_RUN" == "1" ]] && return 1
-  sudo -u zabbix psql zabbix -tAc 'SELECT COUNT(*) FROM users' >/dev/null 2>&1
+  local rows
+  rows="$(sudo -u zabbix psql zabbix -tAc 'SELECT COUNT(*) FROM users' 2>/dev/null)" || return 1
+  [[ "$rows" =~ ^[0-9]+$ ]] && ((rows >= 1))
 }
 
 # _db_pgsql_import_pipe — zcat | psql, redacted + dry-run aware, same
@@ -170,7 +176,7 @@ _db_pgsql_timescale_enable() {
     dnf) pkgs=(timescaledb-2-postgresql) ;;
     zypper) pkgs=(timescaledb) ;;
   esac
-  if ! pkg_install "${pkgs[@]}"; then
+  if ! pkg_install ${pkgs[@]+"${pkgs[@]}"}; then
     log WARN "TimescaleDB package install failed — continuing without it"
     return 0
   fi

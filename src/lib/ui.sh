@@ -124,7 +124,7 @@ ask_multi() {
     printf '  %d) %s\n' "$((i + 1))" "${opts[i]}" >&2
   done
   read -r -p '> ' reply </dev/tty || reply=""
-  printf -v "$var" '%s' "$(_ask_multi_tokens "$reply" "${opts[@]}")"
+  printf -v "$var" '%s' "$(_ask_multi_tokens "$reply" ${opts[@]+"${opts[@]}"})"
 }
 
 # ask_secret VARNAME LABEL [USERNAME] — hidden double-entry, min 12 chars, must

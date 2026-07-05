@@ -26,17 +26,18 @@ _db_mysql_unit_name() {
   return 1
 }
 
-# _db_mysql_defaults_file PASSWORD — mktemp [client] file for the admin
-# password, chmod 600, cleaned up by the EXIT trap. Never pass a password as
-# a command argument (§10 — visible in ps).
+# _db_mysql_defaults_file USER PASSWORD — mktemp [client] file, chmod 600,
+# cleaned up by the EXIT trap. Never pass a password as a command argument
+# (§10 — visible in ps). Shared by the admin auth path here and health.sh's
+# "connect as the zabbix user" checks (§13).
 _db_mysql_defaults_file() {
-  local password="$1" f
+  local user="$1" password="$2" f
   f="$(mktemp -t zbx-mysql-defaults.XXXXXX)"
   chmod 600 "$f"
   ZBX_TEMPFILES+=("$f")
   {
     printf '[client]\n'
-    printf 'user=root\n'
+    printf 'user=%s\n' "$user"
     printf 'password=%s\n' "$password"
   } >"$f"
   printf '%s' "$f"
@@ -50,7 +51,7 @@ _DB_MYSQL_ARGS=()
 _db_mysql_auth_setup() {
   if [[ -n "$ZBX_DB_ADMIN_PASSWORD" ]]; then
     local defaults_file
-    defaults_file="$(_db_mysql_defaults_file "$ZBX_DB_ADMIN_PASSWORD")"
+    defaults_file="$(_db_mysql_defaults_file root "$ZBX_DB_ADMIN_PASSWORD")"
     _DB_MYSQL_ARGS=(mysql "--defaults-extra-file=$defaults_file")
   else
     _DB_MYSQL_ARGS=(mysql -u root)

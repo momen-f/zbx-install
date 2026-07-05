@@ -35,6 +35,8 @@ source "$_SRC_DIR/lib/config.sh" # @dev-source
 source "$_SRC_DIR/lib/firewall.sh" # @dev-source
 # shellcheck source=lib/services.sh
 source "$_SRC_DIR/lib/services.sh" # @dev-source
+# shellcheck source=lib/health.sh
+source "$_SRC_DIR/lib/health.sh" # @dev-source
 
 # Version/date: injected by build.sh; fall back to the VERSION file in dev.
 main_version() {
@@ -476,18 +478,19 @@ plan_confirm() {
   ask_yn "Proceed with this plan?" n
 }
 
-# run_pipeline — execute the steps this build actually implements (update,
-# repo, packages, database, config, firewall, services — Phases 3-5). Health
-# checks (Phase 6) are still preview-only; run() itself no-ops-and-prints
-# every real command under DRY_RUN, so this is safe to call unconditionally
-# and doubles as the detailed dry-run preview for the steps it covers.
-# Returns PIPELINE_BACK if the user picked "back to plan" from an error menu
-# mid-pipeline; main_flow re-enters the mode menu in that case.
+# run_pipeline — execute every step this build implements (update, repo,
+# packages, database, config, firewall, services, health — Phases 3-6).
+# run() itself no-ops-and-prints every real command under DRY_RUN, so this
+# is safe to call unconditionally and doubles as the detailed dry-run
+# preview for the steps it covers (health.sh skips its checks outright
+# under DRY_RUN — nothing above it actually ran). Returns PIPELINE_BACK if
+# the user picked "back to plan" from an error menu mid-pipeline; main_flow
+# re-enters the mode menu in that case.
 run_pipeline() {
   core_state_init
   local label="Running the implemented steps (repo, packages"
   if plan_has server; then label+=", database"; fi
-  label+=", config, firewall, services)"
+  label+=", config, firewall, services, health)"
   [[ "$DRY_RUN" == "1" ]] && label+=" — dry-run"
   printf '\n%s%s%s\n' "$C_BOLD" "$label" "$C_RESET"
 
@@ -495,7 +498,7 @@ run_pipeline() {
   repo_install
   local -a pkgs=()
   IFS=' ' read -ra pkgs <<<"$PLAN_PACKAGES"
-  pkg_install "${pkgs[@]}"
+  pkg_install ${pkgs[@]+"${pkgs[@]}"}
 
   if plan_has server; then
     case "$PLAN_DB_ENGINE" in
@@ -508,14 +511,8 @@ run_pipeline() {
   _pipeline_step config config_apply || return "$PIPELINE_BACK"
   _pipeline_step firewall firewall_apply || return "$PIPELINE_BACK"
   _pipeline_step services services_start || return "$PIPELINE_BACK"
-
-  if [[ "$DRY_RUN" != "1" ]]; then
-    local done_msg="Repo, packages"
-    if plan_has server; then done_msg+=", database"; fi
-    done_msg+=", config, firewall, and services are done."
-    printf '\n%s%s%s Health checks are not implemented yet (SPEC §18 Phase 6).\n' \
-      "$C_GREEN" "$done_msg" "$C_RESET"
-  fi
+  _pipeline_step health health_run_checks || return "$PIPELINE_BACK"
+  health_print_summary
   return 0
 }
 

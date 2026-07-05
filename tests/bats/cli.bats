@@ -230,16 +230,34 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
 # client genuinely doesn't exist until the package installs it, i.e. strictly
 # after detect ran and before db_mysql_provision needs it. A function (not a
 # plain variable) because $TOOLDIR is only set inside setup(), per test.
+# Echoes "1" (not just exit 0) so health.sh's schema-present COUNT(*) query
+# (Phase 6) reads back a row count >= 1, not an empty string.
 mysql_appears_on_install() {
-  printf 'printf "#!/bin/bash\\nexit 0\\n" > "%s/mysql"; chmod +x "%s/mysql"; ' "$TOOLDIR" "$TOOLDIR"
+  printf 'printf "#!/bin/bash\\necho 1\\nexit 0\\n" > "%s/mysql"; chmod +x "%s/mysql"; ' "$TOOLDIR" "$TOOLDIR"
 }
 
+# fake_ss_ports — health.sh's port checks (§13) just need ss to print more
+# than its own header line; the exact port isn't asserted by these tests.
+fake_ss_ports() {
+  fake ss 'printf "Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port\nLISTEN 0  128   0.0.0.0:0        0.0.0.0:*\n"'
+}
+
+# FAKE_CURL_FRONTEND_200 — snippet answering health.sh's frontend HTTP check
+# (§13) with "200" on 127.0.0.1/zabbix; spliced into each test's own curl
+# fake body ahead of its existing behavior (logging, recording, etc.), which
+# still runs for every other invocation.
+read -r -d '' FAKE_CURL_FRONTEND_200 <<'EOF' || true
+    case "$*" in *127.0.0.1/zabbix*) printf 200; exit 0 ;; esac
+EOF
+
 @test "real run: the resolved Zabbix repo URL is actually fetched" {
-  fake curl 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/curl.log"; exit 0'
+  fake curl "$FAKE_CURL_FRONTEND_200"'
+    echo "$*" >>"'"$BATS_TEST_TMPDIR"'/curl.log"; exit 0'
   fake dpkg 'exit 0'
   fake apt-get "$(mysql_appears_on_install)exit 0"
   fake apt-cache 'exit 0'
   fake_db_mysql_success
+  fake_ss_ports
   zx os-release.ubuntu2404 meminfo.4gb --express --yes
   [ "$status" -eq 0 ]
   run cat "$BATS_TEST_TMPDIR/curl.log"
@@ -247,11 +265,13 @@ mysql_appears_on_install() {
 }
 
 @test "real run: apt-get install receives the exact planned package list" {
-  fake curl 'exit 0'
+  fake curl "$FAKE_CURL_FRONTEND_200"'
+    exit 0'
   fake dpkg 'exit 0'
   fake apt-cache 'exit 0'
   fake apt-get "$(mysql_appears_on_install)"'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget.log"; exit 0'
   fake_db_mysql_success
+  fake_ss_ports
   zx os-release.ubuntu2404 meminfo.4gb --express --yes
   [ "$status" -eq 0 ]
   run grep '^install -y' "$BATS_TEST_TMPDIR/aptget.log"
@@ -276,8 +296,27 @@ mysql_appears_on_install() {
   [[ "$output" == *"package transaction failed"* ]]
 }
 
-@test "real run: --db pgsql provisions via sudo -u postgres; the generated password reaches stdin only, never argv or the log" {
+# Regression/acceptance test for Phase 6 (§13/§14): health is a distinct
+# error-menu context from repo/packages (exit 6, not 5) and, unlike those
+# two, never blocks earlier real work from completing — agent-only here
+# genuinely installs and starts the agent for real, then fails specifically
+# because the agent never reports active.
+@test "real run: a failing health check exits 6 unattended (agent-only)" {
   fake curl 'exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get 'exit 0'
+  fake systemctl 'exit 3'
+  fake ss 'printf "header only, no listener\n"'
+  zx os-release.ubuntu2404 meminfo.4gb --agent-only --yes
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"checks failed"* ]]
+  [[ "$output" == *"journalctl -u zabbix-agent2"* ]]
+}
+
+@test "real run: --db pgsql provisions via sudo -u postgres; the generated password reaches stdin only, never argv or the log" {
+  fake curl "$FAKE_CURL_FRONTEND_200"'
+    exit 0'
   fake dpkg 'exit 0'
   fake apt-cache 'exit 0'
   fake apt-get 'exit 0'
@@ -287,13 +326,18 @@ mysql_appears_on_install() {
 $FAKE_SYSTEMCTL_IS_ACTIVE
     esac
     exit 0"
+  fake_ss_ports
   # A deterministic, greppable "generated" password (§10 §18 Phase 4
   # acceptance: secrets never in ps/logs — grep the log in the test).
   fake openssl 'printf "E2EMARKERPASSWORDXXXXXXXXXX"'
-  fake sudo 'echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/sudo.log"; cat >>"'"$BATS_TEST_TMPDIR"'/sudo-stdin.log"; exit 0'
+  # Echoes "1" to stdout (Phase 6): _db_pgsql_schema_present now requires a
+  # genuine row count >= 1, not just a successful query, so the fake needs a
+  # numeric answer for its "already present" resume-guard and health.sh's
+  # own DB checks to see a pass here — same reasoning as mysql's "echo 1".
+  fake sudo 'echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/sudo.log"; cat >>"'"$BATS_TEST_TMPDIR"'/sudo-stdin.log"; echo 1; exit 0'
   zx os-release.ubuntu2404 meminfo.4gb --express --yes --db pgsql --generate-passwords
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Repo, packages, database, config, firewall, and services are done."* ]]
+  [[ "$output" == *"All checks passed"* ]]
   run cat "$BATS_TEST_TMPDIR/sudo-stdin.log"
   [[ "$output" == *"ALTER USER zabbix PASSWORD 'E2EMARKERPASSWORD"* ]]
   run cat "$BATS_TEST_TMPDIR/sudo.log"

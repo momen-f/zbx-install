@@ -391,7 +391,7 @@ _plan_step() {
 
 plan_pipeline_preview() {
   _PLAN_STEP_N=1
-  printf '\n%sPipeline for this plan%s (health checks land in Phase 6):\n' "$C_BOLD" "$C_RESET"
+  printf '\n%sPipeline for this plan%s:\n' "$C_BOLD" "$C_RESET"
   if [[ "${PLAN_UPDATE:-no}" == "yes" ]]; then
     _plan_step "update" "full system update via $DETECT_PKGMGR (§11)"
   fi

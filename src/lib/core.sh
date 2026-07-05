@@ -187,23 +187,32 @@ die() {
 # steps get the generic fallback. v (pick a different Zabbix version),
 # c (re-enter credentials), and s (skip) are step-specific: skip must never
 # appear for repo/packages/db (§14: "never" — a half-installed repo, package
-# set, or DB can't be skipped over).
+# set, or DB can't be skipped over). health has no "back to plan" (§13 lists
+# re-run/log/continue-anyway only, not back).
 _errmenu_opts_for() {
   case "$1" in
     repo) echo "rvl" ;;
     packages) echo "rl" ;;
     db) echo "rcl" ;;
+    health) echo "rls" ;;
     *) echo "rlsb" ;;
   esac
 }
 
+# _errmenu_print_options STEP OPTS — labels are mostly generic, but health's
+# retry/skip read differently in §13 ("re-run checks" / "continue to summary
+# anyway (degraded)") than the generic "Retry"/"Skip" everywhere else.
 _errmenu_print_options() {
-  local opts="$1" line=""
-  [[ "$opts" == *r* ]] && line+="[r] Retry  "
+  local step="$1" opts="$2" line=""
+  if [[ "$opts" == *r* ]]; then
+    if [[ "$step" == "health" ]]; then line+="[r] Re-run checks  "; else line+="[r] Retry  "; fi
+  fi
   [[ "$opts" == *v* ]] && line+="[v] Pick a different Zabbix version  "
   [[ "$opts" == *c* ]] && line+="[c] Re-enter credentials  "
   [[ "$opts" == *l* ]] && line+="[l] View log (last 50)  "
-  [[ "$opts" == *s* ]] && line+="[s] Skip*  "
+  if [[ "$opts" == *s* ]]; then
+    if [[ "$step" == "health" ]]; then line+="[s] Continue to summary anyway (degraded)  "; else line+="[s] Skip*  "; fi
+  fi
   [[ "$opts" == *b* ]] && line+="[b] Back to plan  "
   printf '%s[x] Exit\n' "$line"
 }
@@ -230,7 +239,7 @@ err_menu() {
       printf '%shint: see %s and SPEC §15 for this step%s\n' \
         "$C_YELLOW" "$LOG_FILE" "$C_RESET" >&2
     fi
-    _errmenu_print_options "$opts" >&2
+    _errmenu_print_options "$step" "$opts" >&2
     read -r -p '> ' choice </dev/tty || choice=x
     case "$choice" in
       r | R)

@@ -108,6 +108,12 @@ jobs:
   # opens firewall ports, and starts services (config.sh/firewall.sh/
   # services.sh) — verified below by actually curling the frontend and
   # confirming it lands on the login page, not the setup wizard.
+  # Phase 6 acceptance (SPEC §18): the same real run finishes with all 9
+  # health checks green (health.sh) and prints the final summary — verified
+  # below by grepping the installer's own stdout for the green banner and a
+  # couple of summary fields. Unattended mode exits 6 immediately on any
+  # health-check failure (§13) — the install genuinely has to be correct,
+  # not just "not crash", for this job to pass.
   #
   # db_mysql_provision() drives the DB through systemctl (unit detection +
   # enable --now), same as it would on a real target — a bare `docker run`
@@ -166,9 +172,11 @@ jobs:
             set -e
             ${{ matrix.setup }}
             set +e
-            bash dist/zbx-install.sh --express --yes --no-color --log-file /var/log/zbx.log
+            bash dist/zbx-install.sh --express --yes --no-color --log-file /var/log/zbx.log >/tmp/install.out 2>&1
             rc=$?
             set -e
+            echo "=== installer stdout (always shown) ==="
+            cat /tmp/install.out
             echo "=== log tail (always shown) ==="
             tail -n 120 /var/log/zbx.log || true
             test "$rc" -eq 0
@@ -182,9 +190,15 @@ jobs:
             test "$rows" -gt 0
             echo "=== verifying the generated password never reached the log ==="
             ! grep -qF "$pw" /var/log/zbx.log
+            ! grep -qF "$pw" /tmp/install.out
             echo "=== verifying the frontend is reachable without the setup wizard ==="
             final_url="$(curl -sS -L -o /tmp/frontend.html -w "%{url_effective}" http://127.0.0.1/zabbix/)"
             echo "landed on: $final_url"
             case "$final_url" in *setup.php*) echo "landed on the setup wizard"; exit 1 ;; esac
             grep -qi zabbix /tmp/frontend.html
+            echo "=== verifying all 9 health checks passed and the summary printed ==="
+            grep -q "All checks passed" /tmp/install.out
+            grep -q "Admin / zabbix" /tmp/install.out
+            grep -q "http://.*/zabbix/" /tmp/install.out
+            grep -qi "uninstall" /tmp/install.out
           '

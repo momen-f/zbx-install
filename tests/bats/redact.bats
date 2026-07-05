@@ -63,3 +63,36 @@ CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
   [ "$status" -eq 0 ]
   [ "$output" = "3 4 5 5 6 8 7" ]
 }
+
+@test "core_exit_code_for: config/firewall/services also map to 5, like repo/packages" {
+  run bash -c 'source "'"$CORE"'"; for s in config firewall services; do core_exit_code_for "$s"; done | paste -sd" " -'
+  [ "$status" -eq 0 ]
+  [ "$output" = "5 5 5" ]
+}
+
+# Regression test for Phase 6 (§13/§14): health's error menu has no "back to
+# plan" option (unlike the generic config/firewall/services fallback) and
+# uses different wording for retry/skip ("re-run checks" / "continue to
+# summary anyway (degraded)", not the generic "Retry"/"Skip").
+@test "_errmenu_opts_for health omits back-to-plan; other steps still get it" {
+  run bash -c 'source "'"$CORE"'"; _errmenu_opts_for health'
+  [ "$output" = "rls" ]
+  run bash -c 'source "'"$CORE"'"; _errmenu_opts_for config'
+  [ "$output" = "rlsb" ]
+}
+
+@test "_errmenu_print_options renders health-specific labels, generic labels for other steps" {
+  run bash -c 'source "'"$CORE"'"; _errmenu_print_options health rls'
+  [[ "$output" == *"Re-run checks"* ]]
+  [[ "$output" == *"Continue to summary anyway (degraded)"* ]]
+  [[ "$output" != *"[b] Back to plan"* ]]
+  [[ "$output" != *"[r] Retry"* ]]
+  [[ "$output" != *"[s] Skip*"* ]]
+
+  run bash -c 'source "'"$CORE"'"; _errmenu_print_options config rlsb'
+  [[ "$output" == *"[r] Retry"* ]]
+  [[ "$output" == *"[s] Skip*"* ]]
+  [[ "$output" == *"[b] Back to plan"* ]]
+  [[ "$output" != *"Re-run checks"* ]]
+  [[ "$output" != *"Continue to summary anyway"* ]]
+}
