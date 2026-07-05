@@ -71,10 +71,24 @@ pkg_update() {
 
 # --- install (§12.2) -----------------------------------------------------------
 # _pkg_install_cmd PACKAGES... — one non-interactive transaction, family-specific.
+#
+# dnf-only: refresh the metadata cache first. Rocky/RHEL's AppStream can
+# resolve a package to a NEVRA whose modular metadata (modules.yaml) isn't
+# in the locally cached repodata yet, and dnf then refuses the whole
+# transaction with "No available modular metadata for modular package ...,
+# it cannot be installed on the system" even though the package is really
+# available — hit for real, intermittently, in CI on Rocky 9's
+# mariadb-server (a modular package, but the underlying mechanism isn't
+# package-specific). A cache refresh immediately before the transaction
+# resolves the mismatch; best-effort, since a transient failure here
+# shouldn't preempt the real install attempt or its own error message.
 _pkg_install_cmd() {
   case "$DETECT_PKGMGR" in
     apt) run apt-get install -y "$@" ;;
-    dnf) run dnf install -y "$@" ;;
+    dnf)
+      run dnf makecache --refresh || true
+      run dnf install -y "$@"
+      ;;
     zypper) run zypper --non-interactive install "$@" ;;
     *) return 1 ;;
   esac
