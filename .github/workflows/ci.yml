@@ -107,9 +107,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Bare Docker Hub images are far more minimal than a real target
+          # server — ubuntu:24.04 ships without curl or ca-certificates at
+          # all, which detect_network() correctly reports as no connectivity.
+          # `setup` brings each image up to what a real server already has.
           - image: "ubuntu:24.04"
+            setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
           - image: "rockylinux:9"
+            setup: "dnf install -y -q curl ca-certificates"
             verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
     steps:
       - uses: actions/checkout@v4
@@ -121,9 +127,14 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/w" -w /w "${{ matrix.image }}" bash -c '
             set -e
+            ${{ matrix.setup }}
+            set +e
             bash dist/zbx-install.sh --express --yes --no-color --log-file /var/log/zbx.log
-            echo "=== log tail ==="
-            tail -n 80 /var/log/zbx.log
+            rc=$?
+            set -e
+            echo "=== log tail (always shown) ==="
+            tail -n 120 /var/log/zbx.log || true
+            test "$rc" -eq 0
             echo "=== verifying installed packages ==="
             ${{ matrix.verify }}
           '
