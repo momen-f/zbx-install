@@ -12,13 +12,6 @@ DBP="${BATS_TEST_DIRNAME}/../../src/lib/db_pgsql.sh"
 SERVICES="${BATS_TEST_DIRNAME}/../../src/lib/services.sh"
 HEALTH="${BATS_TEST_DIRNAME}/../../src/lib/health.sh"
 
-# _health_wait_active's real grace period (§13, added after a real CI-only
-# timing race — see health.sh's own comment) would make every "fails" test
-# below eat several real seconds for no reason; 0 still checks exactly once.
-setup() {
-  export ZBX_HEALTH_SERVICE_RETRY_SECONDS=0
-}
-
 hprobe() {
   run bash -c 'source "'"$CORE"'"; source "'"$UI"'"; source "'"$RECOMMEND"'"; source "'"$CONFIG"'"; source "'"$DBM"'"; source "'"$DBP"'"; source "'"$SERVICES"'"; source "'"$HEALTH"'"; '"$1"
 }
@@ -31,19 +24,6 @@ fake_tool() {
 }
 
 # --- individual checks -------------------------------------------------------------
-
-# Regression test for the real CI timing race this grace period exists for
-# (see health.sh's own comment): a unit that reports inactive on the first
-# check or two but active shortly after must still pass, not fail outright.
-@test "_health_wait_active retries within its window instead of failing on the first check" {
-  local d="$BATS_TEST_TMPDIR/t0" counter="$BATS_TEST_TMPDIR/t0-count"
-  : >"$counter"
-  fake_tool "$d" systemctl 'echo x >>"'"$counter"'"
-    n=$(wc -l <"'"$counter"'")
-    if [ "$n" -ge 3 ]; then exit 0; else exit 3; fi'
-  hprobe 'PATH="'"$d"':$PATH" ZBX_HEALTH_SERVICE_RETRY_SECONDS=3; _health_wait_active zabbix-server'
-  [ "$status" -eq 0 ]
-}
 
 @test "_health_check_server_service passes when systemctl reports active" {
   local d="$BATS_TEST_TMPDIR/t1"
@@ -78,6 +58,27 @@ fake_tool() {
   hprobe 'PATH="'"$d"':$PATH" PLAN_WEB_SERVER=nginx DETECT_FAMILY=debian;
     _health_check_web_service; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
   [[ "$output" == *"|1|config test: nginx -t"* ]]
+}
+
+# Regression test: RHEL's web check always has TWO units (httpd + php-fpm —
+# see _services_web_units). The name/failed lists are joined with "${arr[*]}"
+# — under the global IFS ($'\n\t', no space) that joins with a newline
+# instead of a space, embedding one into the "NAME|PASS|HINT" string
+# _health_record encodes; `read` then silently stops at the embedded
+# newline, dropping PASS/HINT and making a clean pass register as a failure.
+# Hit for real in CI (RHEL, apache) before both call sites got their own
+# "local IFS=' '" guard.
+@test "_health_check_web_service joins a multi-unit name/list with a space, not a corrupting newline" {
+  local d="$BATS_TEST_TMPDIR/t4b"
+  fake_tool "$d" systemctl 'exit 0'
+  hprobe 'PATH="'"$d"':$PATH" PLAN_WEB_SERVER=apache DETECT_FAMILY=rhel;
+    _health_check_web_service; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
+  [[ "$output" == "web service (httpd php-fpm)|0|" ]]
+
+  fake_tool "$d" systemctl 'exit 3'
+  hprobe 'PATH="'"$d"':$PATH" PLAN_WEB_SERVER=apache DETECT_FAMILY=rhel;
+    _health_check_web_service; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
+  [[ "$output" == "web service (httpd php-fpm)|1|config test: apachectl configtest" ]]
 }
 
 @test "_health_check_port passes when ss reports a listener, fails on header-only output" {
@@ -261,6 +262,16 @@ fake_tool() {
     health_print_summary'
   [[ "$output" == *"degraded"* ]]
   [[ "$output" != *"All checks passed"* ]]
+}
+
+# Regression test: multiple degraded steps must join with a space (the
+# global IFS has no space — same class of bug as the web-service one above).
+@test "health_print_summary joins multiple degraded steps with a space" {
+  hprobe 'core_color_init; DRY_RUN=0; LOG_FILE=/tmp/x.log; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/etc";
+    PLAN_COMPONENTS=agent; PLAN_AGENT_TYPE=zabbix-agent2; PLAN_CREDS_FILE=none;
+    ZBX_DEGRADED_STEPS=(firewall health);
+    health_print_summary'
+  [[ "$output" == *"firewall health"* ]]
 }
 
 @test "health_print_summary omits the frontend block for an agent-only plan" {

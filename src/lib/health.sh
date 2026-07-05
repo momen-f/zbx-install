@@ -26,39 +26,10 @@ _health_record() {
   ZBX_HEALTH_RESULTS+=("$1|$2|$3")
 }
 
-# Not readonly, and respects a pre-set value — same convention as
-# ZBX_ETC_DIR/OS_RELEASE_FILE, here so bats can set it to 0 (checks exactly
-# once, no delay) instead of eating the real grace period on every "fails"
-# test. Real value: services.sh already waited up to 15s per unit before
-# this step even starts, but a unit can still land in a fleeting
-# "activating" window a moment later — observed for real in CI's
-# containerized systemd (httpd took ~1-2s past its own "Started" log line to
-# report is-active), and a first boot on a real target can plausibly hit the
-# same brief gap, so this is a genuine robustness fix, not a CI-only patch.
-: "${ZBX_HEALTH_SERVICE_RETRY_SECONDS:=5}"
-
-# _health_wait_active UNIT — poll is-active for up to
-# ZBX_HEALTH_SERVICE_RETRY_SECONDS, always checking at least once.
-_health_wait_active() {
-  local unit="$1" waited=0
-  while true; do
-    # TEMPORARY diagnostic (remove once the CI timing question is settled).
-    # rc, not the printed text, is the real is-active contract (matches
-    # --quiet) — the text is only logged for visibility.
-    local state rc
-    state="$(systemctl is-active "$unit" 2>&1)" && rc=0 || rc=$?
-    log INFO "DIAG: $unit is-active (attempt $((waited + 1))) -> '$state' (rc=$rc)"
-    ((rc == 0)) && return 0
-    ((waited >= ZBX_HEALTH_SERVICE_RETRY_SECONDS)) && return 1
-    sleep 1
-    waited=$((waited + 1))
-  done
-}
-
 # --- individual checks (§13 table) ----------------------------------------------
 
 _health_check_server_service() {
-  if _health_wait_active zabbix-server; then
+  if systemctl is-active --quiet zabbix-server 2>/dev/null; then
     _health_record "zabbix-server service" 0 ""
   else
     _health_record "zabbix-server service" 1 "journalctl -u zabbix-server -n 50"
@@ -68,7 +39,7 @@ _health_check_server_service() {
 _health_check_agent_service() {
   local unit="zabbix-agent2"
   [[ "$PLAN_AGENT_TYPE" == "zabbix-agent2" ]] || unit="zabbix-agent"
-  if _health_wait_active "$unit"; then
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then
     _health_record "$unit service" 0 ""
   else
     _health_record "$unit service" 1 "journalctl -u $unit -n 50"
@@ -80,19 +51,18 @@ _health_check_agent_service() {
 _health_check_web_service() {
   local -a units=()
   IFS=' ' read -ra units <<<"$(_services_web_units)"
-  log INFO "DIAG: web units = (${units[*]}) count=${#units[@]}"
   local -a failed=()
   local u
   for u in "${units[@]}"; do
-    log INFO "DIAG: checking unit '$u'"
-    if _health_wait_active "$u"; then
-      log INFO "DIAG: '$u' passed"
-    else
-      log INFO "DIAG: '$u' FAILED, rc=$?"
-      failed+=("$u")
-    fi
+    systemctl is-active --quiet "$u" 2>/dev/null || failed+=("$u")
   done
-  log INFO "DIAG: failed = (${failed[*]+"${failed[*]}"}) count=${#failed[@]}"
+  # The global IFS ($'\n\t', no space — see core.sh) would otherwise join
+  # these with a newline instead of a space, embedding a literal newline in
+  # the "NAME|PASS|HINT" string _health_record encodes below — read then
+  # silently stops at that newline, losing PASS/HINT entirely and making a
+  # passing check register as a failure (hit for real in CI on RHEL's
+  # two-unit "httpd php-fpm" case; §15 gotcha).
+  local IFS=' '
   if ((${#failed[@]} == 0)); then
     _health_record "web service (${units[*]})" 0 ""
   else
@@ -254,6 +224,7 @@ health_print_summary() {
     return 0
   fi
   if ((${#ZBX_DEGRADED_STEPS[@]} > 0)); then
+    local IFS=' '
     printf '\n%s%sInstall finished, but some steps were skipped (degraded): %s%s\n' \
       "$C_YELLOW" "$C_BOLD" "${ZBX_DEGRADED_STEPS[*]}" "$C_RESET"
   else

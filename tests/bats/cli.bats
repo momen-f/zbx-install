@@ -52,7 +52,7 @@ zx() {
   [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" DETECT_SKIP_NET=1 \
-    ZBX_ETC_DIR="$ETCDIR" ZBX_HEALTH_SERVICE_RETRY_SECONDS=0 \
+    ZBX_ETC_DIR="$ETCDIR" \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -67,7 +67,7 @@ zxn() {
   [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" \
-    ZBX_ETC_DIR="$ETCDIR" ZBX_HEALTH_SERVICE_RETRY_SECONDS=0 \
+    ZBX_ETC_DIR="$ETCDIR" \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
