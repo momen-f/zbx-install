@@ -260,7 +260,9 @@ core_on_err() {
 core_on_exit() {
   local f
   for f in "${ZBX_TEMPFILES[@]:-}"; do
-    [[ -n "$f" && -e "$f" ]] && rm -f "$f" 2>/dev/null || true
+    if [[ -n "$f" && -e "$f" ]]; then
+      rm -f "$f" 2>/dev/null || true
+    fi
   done
 }
 

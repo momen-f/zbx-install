@@ -13,7 +13,13 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck bats
+          sudo apt-get install -y bats
+          # Pinned exact versions (not apt's, which drift and gave a false
+          # CI failure on 2026-07-05: apt's older shellcheck flagged SC2015 on
+          # code the pinned 0.11.0 below — matching local dev — does not).
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz" \
+            | tar -xJ -C /tmp
+          sudo install /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
           curl -fsSL "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64" \
             -o /usr/local/bin/shfmt
           sudo chmod +x /usr/local/bin/shfmt
