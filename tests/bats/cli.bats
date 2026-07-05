@@ -19,6 +19,14 @@ setup() {
     src="$(command -v "$t" 2>/dev/null || true)"
     if [[ -n "$src" ]]; then ln -sf "$src" "$TOOLDIR/$t"; fi
   done
+  # config.sh's real-run tests need config.sh's hard-required paths
+  # (zabbix_server.conf, web/, the agent conf) to exist somewhere writable —
+  # ZBX_ETC_DIR (config.sh) redirects them here instead of the real /etc/zabbix.
+  ETCDIR="$BATS_TEST_TMPDIR/etc-zabbix"
+  mkdir -p "$ETCDIR/web"
+  : >"$ETCDIR/zabbix_server.conf"
+  : >"$ETCDIR/zabbix_agent2.conf"
+  : >"$ETCDIR/zabbix_agentd.conf"
 }
 
 # _pkgmgr_fake_for OSR — the package manager a real host with this fixture
@@ -44,6 +52,7 @@ zx() {
   [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" DETECT_SKIP_NET=1 \
+    ZBX_ETC_DIR="$ETCDIR" \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -58,6 +67,7 @@ zxn() {
   [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" \
+    ZBX_ETC_DIR="$ETCDIR" \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -176,12 +186,40 @@ step() {
 # faking curl/dpkg/apt-get/apt-cache to record their argv and succeed, so the
 # real repo_install/pkg_install code paths run for real without touching the
 # network or a real package manager.
+# FAKE_SYSTEMCTL_IS_ACTIVE — shared "is-active" whitelist body: only the
+# units services_start actually polls report active. Checking every
+# remaining arg (not a fixed position) matters because callers differ —
+# detect_firewall() calls "is-active --quiet firewalld" (unit is $3),
+# _services_wait_active calls "is-active UNIT" (unit is $2). Anything else
+# (notably "firewalld" itself) correctly reports inactive, so
+# detect_firewall() doesn't get a false "firewalld is running" positive.
+read -r -d '' FAKE_SYSTEMCTL_IS_ACTIVE <<'EOF' || true
+    is-active)
+      shift
+      for a in "$@"; do
+        case "$a" in
+          mariadb | postgresql | zabbix-server | apache2 | nginx | zabbix-agent2 | zabbix-agent | php*-fpm | php-fpm)
+            echo active
+            exit 0
+            ;;
+        esac
+      done
+      exit 3
+      ;;
+EOF
+
 # fake_db_mysql_success — a real (non-dry-run) express run now continues past
-# packages into db_mysql_provision; fake systemctl for unit detection+enable.
+# packages into db_mysql_provision and (Phase 5) services_start; fake
+# systemctl for unit detection+enable, and "is-active" so
+# _services_wait_active returns immediately instead of polling the real 15s.
 # mysql itself is deliberately NOT faked into existence up front — see
 # MYSQL_APPEARS_ON_INSTALL below.
 fake_db_mysql_success() {
-  fake systemctl 'case "$1" in list-unit-files) echo "mariadb.service enabled" ;; esac; exit 0'
+  fake systemctl "case \"\$1\" in
+    list-unit-files) echo \"mariadb.service enabled\" ;;
+$FAKE_SYSTEMCTL_IS_ACTIVE
+    esac
+    exit 0"
 }
 
 # mysql_appears_on_install — echoes a snippet for a test's own apt-get fake
@@ -243,14 +281,19 @@ mysql_appears_on_install() {
   fake dpkg 'exit 0'
   fake apt-cache 'exit 0'
   fake apt-get 'exit 0'
-  fake systemctl 'exit 0'
+  # "is-active" -> active (for the right units) so services_start's poll
+  # returns immediately instead of spending the real 15s per unit (Phase 5).
+  fake systemctl "case \"\$1\" in
+$FAKE_SYSTEMCTL_IS_ACTIVE
+    esac
+    exit 0"
   # A deterministic, greppable "generated" password (§10 §18 Phase 4
   # acceptance: secrets never in ps/logs — grep the log in the test).
   fake openssl 'printf "E2EMARKERPASSWORDXXXXXXXXXX"'
   fake sudo 'echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/sudo.log"; cat >>"'"$BATS_TEST_TMPDIR"'/sudo-stdin.log"; exit 0'
   zx os-release.ubuntu2404 meminfo.4gb --express --yes --db pgsql --generate-passwords
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Repo, packages, and the database are provisioned."* ]]
+  [[ "$output" == *"Repo, packages, database, config, firewall, and services are done."* ]]
   run cat "$BATS_TEST_TMPDIR/sudo-stdin.log"
   [[ "$output" == *"ALTER USER zabbix PASSWORD 'E2EMARKERPASSWORD"* ]]
   run cat "$BATS_TEST_TMPDIR/sudo.log"

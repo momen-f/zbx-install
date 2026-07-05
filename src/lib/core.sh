@@ -24,11 +24,18 @@ IFS=$'\n\t'
 ZBX_SECRETS=()
 # Temp paths registered here are removed by the EXIT trap.
 ZBX_TEMPFILES=()
+# Step IDs the user chose to skip via err_menu's [s] option — listed as
+# degraded in the Phase 6 summary (§14).
+ZBX_DEGRADED_STEPS=()
 
 # err_menu return signals (the pipeline driver acts on these).
 readonly ERRMENU_RETRY=0
 readonly ERRMENU_SKIP=1
 readonly ERRMENU_BACK=2
+# _pipeline_step's own "go back to plan" signal (distinct from ERRMENU_BACK's
+# numeric value only by convention — kept separate so a change to one doesn't
+# silently change the other).
+readonly PIPELINE_BACK=2
 
 # Per-step retry counters, keyed by STEP_ID.
 declare -A ZBX_RETRY_COUNT=()
@@ -153,7 +160,7 @@ core_exit_code_for() {
   case "$1" in
     detect) echo 3 ;;
     network) echo 4 ;;
-    repo | packages) echo 5 ;;
+    repo | packages | config | firewall | services) echo 5 ;;
     health) echo 6 ;;
     db) echo 8 ;;
     *) echo 7 ;;
@@ -260,6 +267,39 @@ err_menu() {
         [[ "$confirm" =~ ^[Yy]$ ]] && exit "$code"
         ;;
       *) : ;;
+    esac
+  done
+}
+
+# Record a step the user chose to skip via err_menu's [s] option — the
+# Phase 6 summary lists these as degraded (§14).
+core_mark_degraded() {
+  ZBX_DEGRADED_STEPS+=("$1")
+}
+
+# _pipeline_step STEP_ID FN — wraps a zero-arg boolean FN in the retry/skip/
+# back loop implied by err_menu's "rlsb" context (config/firewall/services,
+# §14). Unlike repo/packages/db, these steps CAN be meaningfully skipped, so
+# (unattended-mode die() aside) this never itself fails: it returns 0 to
+# continue the pipeline, or PIPELINE_BACK to tell the caller to return to the
+# plan. repo.sh/pkg.sh/db_*.sh keep their own inline loops — their option
+# sets never include skip/back, so a shared wrapper would buy them nothing.
+_pipeline_step() {
+  local step="$1" fn="$2" rc
+  while true; do
+    if "$fn"; then
+      return 0
+    fi
+    # err_menu returning non-zero (SKIP/BACK) is the expected outcome here,
+    # not a real failure — a bare call would trip set -e before the case
+    # below ever ran, so capture it via &&/|| instead (§15 gotcha).
+    err_menu "$step" "step '$step' failed — see the log" && rc=0 || rc=$?
+    case "$rc" in
+      "$ERRMENU_SKIP")
+        core_mark_degraded "$step"
+        return 0
+        ;;
+      "$ERRMENU_BACK") return "$PIPELINE_BACK" ;;
     esac
   done
 }

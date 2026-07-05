@@ -104,6 +104,10 @@ jobs:
   # and imports the schema (express mode's default DB engine) — verified
   # below by querying a real table, and the generated password must never
   # appear in the log (grepped after the run).
+  # Phase 5 acceptance (SPEC §18): the same real run also renders configs,
+  # opens firewall ports, and starts services (config.sh/firewall.sh/
+  # services.sh) — verified below by actually curling the frontend and
+  # confirming it lands on the login page, not the setup wizard.
   #
   # db_mysql_provision() drives the DB through systemctl (unit detection +
   # enable --now), same as it would on a real target — a bare `docker run`
@@ -178,4 +182,9 @@ jobs:
             test "$rows" -gt 0
             echo "=== verifying the generated password never reached the log ==="
             ! grep -qF "$pw" /var/log/zbx.log
+            echo "=== verifying the frontend is reachable without the setup wizard ==="
+            final_url="$(curl -sS -L -o /tmp/frontend.html -w "%{url_effective}" http://127.0.0.1/zabbix/)"
+            echo "landed on: $final_url"
+            case "$final_url" in *setup.php*) echo "landed on the setup wizard"; exit 1 ;; esac
+            grep -qi zabbix /tmp/frontend.html
           '

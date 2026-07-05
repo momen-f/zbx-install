@@ -229,7 +229,17 @@ rprobe() {
     PLAN_COMPONENTS=frontend,agent PLAN_DB_ENGINE=mariadb PLAN_WEB_SERVER=nginx;
     PLAN_AGENT_PLUGINS=postgresql,mssql PLAN_TOOLS=yes;
     plan_packages; printf "%s" "$PLAN_PACKAGES"'
-  [ "$output" = "zabbix-web-mysql zabbix-nginx-conf zabbix-agent2 zabbix-agent2-plugin-postgresql zabbix-agent2-plugin-mssql zabbix-get zabbix-sender nginx" ]
+  [ "$output" = "zabbix-web-mysql zabbix-nginx-conf-php8 zabbix-agent2 zabbix-agent2-plugin-postgresql zabbix-agent2-plugin-mssql zabbix-get zabbix-sender nginx" ]
+}
+
+# Regression test: SLES only ships zabbix-apache-conf-php8 /
+# zabbix-nginx-conf-php8 (verified live 2026-07-05 against the real repo) —
+# the unsuffixed names don't exist there at all, unlike apt/dnf.
+@test "plan_packages: suse apache frontend uses the -php8 suffixed package" {
+  rprobe 'DETECT_FAMILY=suse DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=none DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=frontend PLAN_DB_ENGINE=mariadb PLAN_WEB_SERVER=apache;
+    plan_packages; printf "%s" "$PLAN_PACKAGES"'
+  [ "$output" = "zabbix-web-mysql zabbix-apache-conf-php8 apache2" ]
 }
 
 # --- plan_port_warnings: only ports the selected components need ------------------

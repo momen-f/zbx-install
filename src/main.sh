@@ -29,6 +29,12 @@ source "$_SRC_DIR/lib/pkg.sh" # @dev-source
 source "$_SRC_DIR/lib/db_mysql.sh" # @dev-source
 # shellcheck source=lib/db_pgsql.sh
 source "$_SRC_DIR/lib/db_pgsql.sh" # @dev-source
+# shellcheck source=lib/config.sh
+source "$_SRC_DIR/lib/config.sh" # @dev-source
+# shellcheck source=lib/firewall.sh
+source "$_SRC_DIR/lib/firewall.sh" # @dev-source
+# shellcheck source=lib/services.sh
+source "$_SRC_DIR/lib/services.sh" # @dev-source
 
 # Version/date: injected by build.sh; fall back to the VERSION file in dev.
 main_version() {
@@ -471,16 +477,17 @@ plan_confirm() {
 }
 
 # run_pipeline — execute the steps this build actually implements (update,
-# repo, packages, database — Phases 3-4). Later phases (config, firewall,
-# services, health) only ever appear in plan_pipeline_preview until their own
-# phase lands; run() itself no-ops-and-prints every real command under
-# DRY_RUN, so this is safe to call unconditionally and doubles as the
-# detailed dry-run preview for the steps it covers.
+# repo, packages, database, config, firewall, services — Phases 3-5). Health
+# checks (Phase 6) are still preview-only; run() itself no-ops-and-prints
+# every real command under DRY_RUN, so this is safe to call unconditionally
+# and doubles as the detailed dry-run preview for the steps it covers.
+# Returns PIPELINE_BACK if the user picked "back to plan" from an error menu
+# mid-pipeline; main_flow re-enters the mode menu in that case.
 run_pipeline() {
   core_state_init
   local label="Running the implemented steps (repo, packages"
   if plan_has server; then label+=", database"; fi
-  label+=")"
+  label+=", config, firewall, services)"
   [[ "$DRY_RUN" == "1" ]] && label+=" — dry-run"
   printf '\n%s%s%s\n' "$C_BOLD" "$label" "$C_RESET"
 
@@ -498,17 +505,22 @@ run_pipeline() {
     creds_write_summary
   fi
 
+  _pipeline_step config config_apply || return "$PIPELINE_BACK"
+  _pipeline_step firewall firewall_apply || return "$PIPELINE_BACK"
+  _pipeline_step services services_start || return "$PIPELINE_BACK"
+
   if [[ "$DRY_RUN" != "1" ]]; then
-    local done_msg="Repo and packages installed."
-    if plan_has server; then done_msg="Repo, packages, and the database are provisioned."; fi
-    printf '\n%s%s%s Config, firewall, services, and health checks are not\n' \
+    local done_msg="Repo, packages"
+    if plan_has server; then done_msg+=", database"; fi
+    done_msg+=", config, firewall, and services are done."
+    printf '\n%s%s%s Health checks are not implemented yet (SPEC §18 Phase 6).\n' \
       "$C_GREEN" "$done_msg" "$C_RESET"
-    printf 'implemented yet (SPEC §18 Phases 5-6).\n'
   fi
+  return 0
 }
 
 main_flow() {
-  local m
+  local m rc
   while true; do
     if [[ "$MODE" == "interactive" ]]; then
       mode_menu
@@ -522,7 +534,12 @@ main_flow() {
     if plan_confirm; then
       plan_pipeline_preview
       log INFO "plan confirmed (mode=$m)"
-      run_pipeline
+      run_pipeline && rc=0 || rc=$?
+      if [[ "$rc" == "$PIPELINE_BACK" ]]; then
+        log INFO "user chose 'back to plan' mid-pipeline"
+        MODE="interactive"
+        continue
+      fi
       return 0
     fi
     log INFO "plan rejected — returning to the mode menu (flowchart: confirm->no->mode)"

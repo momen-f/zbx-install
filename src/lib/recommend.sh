@@ -198,10 +198,15 @@ plan_packages() {
     else
       pkgs+=(zabbix-web-mysql)
     fi
+    # Verified live 2026-07-05: SLES only ships these two under a "-php8"
+    # suffix (zabbix-apache-conf-php8 / zabbix-nginx-conf-php8) — the
+    # unsuffixed names don't exist there at all, only on apt/dnf.
+    local suffix=""
+    [[ "$DETECT_FAMILY" == "suse" ]] && suffix="-php8"
     if [[ "$PLAN_WEB_SERVER" == "nginx" ]]; then
-      pkgs+=(zabbix-nginx-conf)
+      pkgs+=("zabbix-nginx-conf${suffix}")
     else
-      pkgs+=(zabbix-apache-conf)
+      pkgs+=("zabbix-apache-conf${suffix}")
     fi
   fi
   if plan_has agent; then
@@ -386,7 +391,7 @@ _plan_step() {
 
 plan_pipeline_preview() {
   _PLAN_STEP_N=1
-  printf '\n%sPipeline for this plan%s (config/firewall/services/health land in Phases 5-6):\n' "$C_BOLD" "$C_RESET"
+  printf '\n%sPipeline for this plan%s (health checks land in Phase 6):\n' "$C_BOLD" "$C_RESET"
   if [[ "${PLAN_UPDATE:-no}" == "yes" ]]; then
     _plan_step "update" "full system update via $DETECT_PKGMGR (§11)"
   fi
