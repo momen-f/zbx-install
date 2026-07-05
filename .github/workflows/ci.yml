@@ -104,6 +104,17 @@ jobs:
   # and imports the schema (express mode's default DB engine) — verified
   # below by querying a real table, and the generated password must never
   # appear in the log (grepped after the run).
+  #
+  # db_mysql_provision() drives the DB through systemctl (unit detection +
+  # enable --now), same as it would on a real target — a bare `docker run`
+  # container has no systemd to talk to (no PID 1 init, systemctl either
+  # missing or unable to reach a bus), which made "no mariadb/mysqld/mysql
+  # service unit found" a false CI failure on 2026-07-05, not a real bug.
+  # geerlingguy's docker-<os>-ansible images run systemd as PID 1 (built for
+  # exactly this — testing service-managing automation in Docker) and are
+  # otherwise the same base OS, so they're used here in place of the bare
+  # images; --privileged + the cgroup bind-mount is systemd-in-Docker's
+  # standard, documented requirement.
   real-install:
     runs-on: ubuntu-latest
     needs: lint-and-test
@@ -111,18 +122,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Bare Docker Hub images are far more minimal than a real target
-          # server. ubuntu:24.04 ships with no curl/ca-certificates at all
-          # (detect_network() correctly reports no connectivity), so `setup`
-          # brings it up to what a real server already has. rockylinux:9
-          # already ships curl (as curl-minimal) and working certs — its
-          # "Repo reachable: yes" confirmed that before this was ever added —
-          # so it needs no setup; forcing the full curl package actively
-          # breaks it (curl-minimal and curl are mutually-exclusive rpms).
-          - image: "ubuntu:24.04"
+          - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
             setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
-          - image: "rockylinux:9"
+          - image: "geerlingguy/docker-rockylinux9-ansible:latest"
             setup: ":"
             # zabbix-frontend-php doesn't exist on RHEL — the frontend
             # package there is zabbix-web-mysql (DB-engine-specific).
@@ -135,7 +138,21 @@ jobs:
 
       - name: Real express install (repo + packages + database), then verify, in ${{ matrix.image }}
         run: |
-          docker run --rm -v "$PWD:/w" -w /w "${{ matrix.image }}" bash -c '
+          set -e
+          cid="$(docker run -d --privileged --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD:/w" "${{ matrix.image }}")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+          echo "=== waiting for systemd to finish booting ==="
+          for _ in $(seq 1 30); do
+            state="$(docker exec "$cid" systemctl is-system-running 2>/dev/null || true)"
+            case "$state" in running | degraded) break ;; esac
+            sleep 1
+          done
+          echo "systemd state: $state"
+
+          docker exec -w /w "$cid" bash -c '
             set -e
             ${{ matrix.setup }}
             set +e
