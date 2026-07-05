@@ -81,6 +81,46 @@ CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
   [ "$output" = "rlsb" ]
 }
 
+# Regression coverage for Phase 7's resume flow (§14/§18): resume_check
+# (main.sh) decides interactive-vs-skip purely from these two helpers, so
+# their edge cases (missing file, empty file, actually-has-progress) matter
+# more than the trivial happy path alone would suggest.
+@test "core_state_has_progress is false when the state file doesn't exist yet" {
+  run bash -c 'source "'"$CORE"'"; STATE_FILE="'"$BATS_TEST_TMPDIR"'/nope/state"; core_state_has_progress'
+  [ "$status" -ne 0 ]
+}
+
+@test "core_state_has_progress is false for an empty (freshly-touched) state file" {
+  : >"$BATS_TEST_TMPDIR/state"
+  run bash -c 'source "'"$CORE"'"; STATE_FILE="'"$BATS_TEST_TMPDIR"'/state"; core_state_has_progress'
+  [ "$status" -ne 0 ]
+}
+
+@test "core_state_has_progress is true once a step has been marked done" {
+  run bash -c '
+    source "'"$CORE"'"
+    STATE_FILE="'"$BATS_TEST_TMPDIR"'/state2"
+    core_state_init
+    state_mark_done repo
+    core_state_has_progress
+  '
+  [ "$status" -eq 0 ]
+}
+
+@test "core_state_clear wipes progress so core_state_has_progress goes false again" {
+  run bash -c '
+    source "'"$CORE"'"
+    STATE_FILE="'"$BATS_TEST_TMPDIR"'/state3"
+    core_state_init
+    state_mark_done repo
+    core_state_clear
+    core_state_has_progress && echo "still-has-progress" || echo "cleared"
+    core_state_is_done repo && echo "repo-still-done" || echo "repo-not-done"
+  '
+  [[ "$output" == *"cleared"* ]]
+  [[ "$output" == *"repo-not-done"* ]]
+}
+
 @test "_errmenu_print_options renders health-specific labels, generic labels for other steps" {
   run bash -c 'source "'"$CORE"'"; _errmenu_print_options health rls'
   [[ "$output" == *"Re-run checks"* ]]

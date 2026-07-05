@@ -21,6 +21,8 @@ source "$_SRC_DIR/lib/detect.sh" # @dev-source
 source "$_SRC_DIR/lib/recommend.sh" # @dev-source
 # shellcheck source=lib/creds.sh
 source "$_SRC_DIR/lib/creds.sh" # @dev-source
+# shellcheck source=lib/configfile.sh
+source "$_SRC_DIR/lib/configfile.sh" # @dev-source
 # shellcheck source=lib/repo.sh
 source "$_SRC_DIR/lib/repo.sh" # @dev-source
 # shellcheck source=lib/pkg.sh
@@ -62,6 +64,7 @@ Modes (mutually exclusive; default: interactive menu)
 
 Options
   --yes                   assume yes on confirmations (required for headless)
+  --resume                skip the resume/fresh-start question, resume
   --dry-run               print every command instead of executing
   --zabbix-version X.Y    override suggested Zabbix version
   --db mysql|pgsql        override DB engine (mysql covers MariaDB)
@@ -81,9 +84,14 @@ MODE="interactive"
 CONFIG_FILE=""
 ASSUME_YES=0
 FORCED_FAMILY=0
+RESUME=0
 CUR_MODE=""
 OPT_ZBX_VERSION="" OPT_DB="" OPT_WEB="" OPT_COMPONENTS=""
 OPT_UPDATE="" OPT_GENPASS=0 OPT_CREDS_FILE=""
+# Appendix A keys with no CLI-flag equivalent (SPEC §7 offers none) — only
+# configfile.sh's --config parsing ever sets these; resolve_plan (recommend.sh)
+# consults them the same way it does the flag-backed OPT_* above.
+OPT_TZ="" OPT_OPEN_FIREWALL="" OPT_AGENT_TYPE="" OPT_SERVER_IP="" OPT_TIMESCALE=""
 _MODE_SET=0
 
 usage_err() {
@@ -130,6 +138,7 @@ parse_args() {
         ASSUME_YES=1
         UNATTENDED=1
         ;;
+      --resume) RESUME=1 ;;
       --dry-run) DRY_RUN=1 ;;
       --no-color) USE_COLOR=0 ;;
       --zabbix-version)
@@ -300,6 +309,36 @@ guard_network() {
   done
 }
 
+# resume_check — §14: "on start, if state exists and is incomplete, offer
+# resume or fresh; --resume skips the question." Which exact steps a
+# *finished* run needs isn't known this early (no plan exists yet) — the
+# per-step core_state_is_done() checks already scattered through
+# repo.sh/pkg.sh/db_*.sh/services.sh/health.sh are what actually skip
+# completed work; this only decides whether to keep or wipe that record.
+# Unattended (config-file or --yes) always resumes without asking — there is
+# no TTY to ask on, and silently redoing already-finished work on every
+# retry would be a worse default for automation than picking up where a
+# previous run left off.
+resume_check() {
+  core_state_init
+  core_state_has_progress || return 0
+  if [[ "$RESUME" == "1" || "$UNATTENDED" == "1" ]]; then
+    log INFO "resuming previous run (state file has progress)"
+    return 0
+  fi
+  local choice
+  ask_choice choice "A previous run left partial progress ($STATE_FILE). Choose:" \
+    "resume — skip steps already completed" \
+    "start fresh — clear saved progress and redo everything"
+  case "$choice" in
+    resume*) log INFO "user chose to resume" ;;
+    "start fresh"*)
+      core_state_clear
+      log INFO "user chose to start fresh — state cleared"
+      ;;
+  esac
+}
+
 # --- mode selection and pickers -----------------------------------------------
 mode_menu() {
   local choice
@@ -459,8 +498,14 @@ prepare_plan() {
       agent_params
       ;;
     custom)
-      picker_stack
-      picker_extras
+      # MODE=custom via --config (§18 Phase 7) means "every choice comes from
+      # the file's OPT_*-mapped keys, not an interactive picker" — these two
+      # read from /dev/tty unconditionally, so they'd break (or block
+      # forever) a --config run that has no TTY at all.
+      if [[ "$UNATTENDED" != "1" ]]; then
+        picker_stack
+        picker_extras
+      fi
       ;;
   esac
   resolve_update
@@ -516,6 +561,88 @@ run_pipeline() {
   return 0
 }
 
+# --- uninstall (§14, §18 Phase 7) ---------------------------------------------
+# _uninstall_find_packages — currently-installed zabbix-owned packages,
+# discovered from the package manager itself rather than replayed from
+# PLAN_PACKAGES (a separate --uninstall invocation has no plan at all, and a
+# stale/guessed list could miss packages a later --components run added).
+# Every Zabbix-shipped package name starts with "zabbix" (zabbix-release
+# included, so removing this list also removes the repo file/key §14 asks
+# for) — mariadb-server/httpd/nginx/postgresql never match, so the "never
+# remove the DB engine or web server" rule holds by construction, not by a
+# separate exclude list.
+_uninstall_find_packages() {
+  local out=""
+  case "$DETECT_PKGMGR" in
+    apt) out="$(dpkg-query -W -f '${Package}\n' 'zabbix*' 2>/dev/null)" || true ;;
+    dnf | zypper) out="$(rpm -qa --qf '%{NAME}\n' 'zabbix*' 2>/dev/null)" || true ;;
+  esac
+  printf '%s' "$out" | tr '\n' ' '
+}
+
+# _uninstall_drop_db — best-effort DROP for whichever engine is actually
+# present; detected from the client binary, not PLAN_DB_ENGINE (uninstall
+# never builds a plan). Never touches the engine service/package itself.
+_uninstall_drop_db() {
+  if command -v mysql >/dev/null 2>&1; then
+    _db_mysql_auth_setup
+    if ! printf "DROP DATABASE IF EXISTS zabbix;\nDROP USER IF EXISTS 'zabbix'@'localhost';\n" |
+      run "${_DB_MYSQL_ARGS[@]}"; then
+      log WARN "dropping the zabbix mysql database/user failed — see the log"
+    fi
+  elif command -v psql >/dev/null 2>&1; then
+    if ! { run sudo -u postgres psql -c 'DROP DATABASE IF EXISTS zabbix' &&
+      run sudo -u postgres psql -c 'DROP ROLE IF EXISTS zabbix'; }; then
+      log WARN "dropping the zabbix postgres database/role failed — see the log"
+    fi
+  else
+    log WARN "no mysql/psql client found — cannot drop the zabbix database"
+  fi
+}
+
+# uninstall_run — §14: remove zabbix packages + the repo package only; ask
+# separately (default: keep) whether to also drop the zabbix DB/user and
+# whether to delete ZBX_ETC_DIR. Never removes the DB engine or web server.
+# Always prints what was kept, per spec.
+uninstall_run() {
+  log INFO "starting uninstall"
+  # Global IFS ($'\n\t', core.sh) has no space — every "${zpkgs[*]}" join
+  # below needs this scoped override, or it silently joins with a newline
+  # instead (§15 gotcha).
+  local IFS=' '
+  local -a zpkgs=()
+  IFS=' ' read -ra zpkgs <<<"$(_uninstall_find_packages)"
+  if ((${#zpkgs[@]} == 0)); then
+    printf 'No Zabbix packages found — nothing to remove.\n'
+  else
+    printf 'Removing: %s\n' "${zpkgs[*]}"
+    pkg_remove "${zpkgs[@]}"
+  fi
+
+  local drop_db=0 del_config=0
+  if [[ "$UNATTENDED" == "1" ]]; then
+    log INFO "unattended uninstall — keeping the zabbix DB/user and $ZBX_ETC_DIR by default"
+  else
+    ask_yn "Drop the 'zabbix' database and DB user too?" n && drop_db=1
+    ask_yn "Delete ${ZBX_ETC_DIR} (all Zabbix config files) too?" n && del_config=1
+  fi
+  ((drop_db == 1)) && _uninstall_drop_db
+  ((del_config == 1)) && run rm -rf "$ZBX_ETC_DIR"
+  # A removed package set makes prior repo/packages/db progress meaningless —
+  # a later reinstall must not skip those steps just because this state file
+  # still says they're done.
+  core_state_clear
+
+  printf '\n%sUninstall summary%s\n' "$C_BOLD" "$C_RESET"
+  if ((${#zpkgs[@]} > 0)); then
+    printf '  Removed packages: %s\n' "${zpkgs[*]}"
+  fi
+  printf '  Kept: database engine, web server (never removed by this installer)\n'
+  if ((drop_db == 1)); then printf '  Removed: zabbix database/user\n'; else printf '  Kept: zabbix database/user\n'; fi
+  if ((del_config == 1)); then printf '  Removed: %s\n' "$ZBX_ETC_DIR"; else printf '  Kept: %s\n' "$ZBX_ETC_DIR"; fi
+  log INFO "uninstall complete"
+}
+
 main_flow() {
   local m rc
   while true; do
@@ -557,12 +684,12 @@ main() {
       detect_report
       exit 0
       ;;
-    uninstall)
-      printf 'Uninstall arrives in Phase 7 (SPEC §18).\n'
-      exit 0
-      ;;
     unattended)
-      die "--config unattended mode arrives in Phase 7 (SPEC §18)" 2
+      # --config is unattended by definition (parse_args already set
+      # UNATTENDED=1) — a malformed file has no interactive retry story, so
+      # this is exactly die()'s documented case, not err_menu's.
+      cfgfile_parse "$CONFIG_FILE" || die "$CFGFILE_ERR" 2
+      MODE="$CFGFILE_MODE"
       ;;
   esac
   if ! guard_tty; then
@@ -570,6 +697,14 @@ main() {
     printf '  Use "--config FILE --yes" or "--express --yes" (SPEC §6).\n' >&2
     exit 2
   fi
+  if [[ "$MODE" == "uninstall" ]]; then
+    # Needs DETECT_PKGMGR/DETECT_FAMILY, but none of the install-flow guards
+    # or recommendation apply to removing an existing install.
+    detect_run
+    uninstall_run
+    exit 0
+  fi
+  resume_check
   detect_run
   detect_report
   guard_supported

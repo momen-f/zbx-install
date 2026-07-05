@@ -154,6 +154,21 @@ core_state_is_done() {
   [[ -f "$STATE_FILE" ]] && grep -qxF "${step}=done" "$STATE_FILE"
 }
 
+# core_state_has_progress — a previous run left at least one step marked
+# done (§14 resume: "if state exists and is incomplete"). Which exact steps
+# a *finished* run would have isn't knowable before a plan exists, so this
+# only asks the weaker, sufficient question: is there anything to resume?
+core_state_has_progress() {
+  [[ -s "$STATE_FILE" ]]
+}
+
+# core_state_clear — wipe saved progress so every step re-runs: the "start
+# fresh" resume choice (§14), and also used by uninstall so a later reinstall
+# doesn't skip steps a removed package set makes newly-undone.
+core_state_clear() {
+  { : >"$STATE_FILE"; } 2>/dev/null || true
+}
+
 # --- error menu (§14) — the no-exit policy ----------------------------------
 # Map a STEP_ID to its Appendix B exit code (used on explicit Exit / unattended).
 core_exit_code_for() {

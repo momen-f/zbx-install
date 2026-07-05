@@ -23,6 +23,12 @@ creds_collect() {
   if ! plan_has server; then
     return 0
   fi
+  # configfile.sh's DB_PASS already set (and registered) this — an explicit
+  # password from the config file must win over auto-generation, and must
+  # never be regenerated on a resumed/retried call into this function.
+  if [[ -n "$ZBX_DB_PASSWORD" ]]; then
+    return 0
+  fi
   if [[ "$UNATTENDED" == "1" || "${OPT_GENPASS:-0}" == "1" ]]; then
     ZBX_DB_PASSWORD="$(ui_gen_password)"
     core_register_secret "$ZBX_DB_PASSWORD"

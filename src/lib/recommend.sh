@@ -140,10 +140,19 @@ recommend_run() {
 
 # resolve_plan — recommendation + CLI overrides → PLAN_*. Custom-mode pickers
 # then mutate PLAN_* further, so their defaults naturally include the flags.
+#
+# OPT_AGENT_TYPE/OPT_TIMESCALE/OPT_SERVER_IP/OPT_TZ/OPT_OPEN_FIREWALL have no
+# CLI flag (SPEC §7 doesn't offer one) — only configfile.sh's Appendix A keys
+# set them. Without this override point, resolve_plan's own hardcoded
+# defaults below would silently clobber a config-file value every time
+# prepare_plan calls it, since the custom-mode pickers that would otherwise
+# apply a non-default choice are skipped entirely under UNATTENDED=1 (§18
+# Phase 7 — a --config run never touches /dev/tty).
 resolve_plan() {
   PLAN_ZBX_VERSION="${OPT_ZBX_VERSION:-$REC_ZBX_VERSION}"
   case "${OPT_DB:-}" in
     pgsql) PLAN_DB_ENGINE="pgsql" ;;
+    mariadb) PLAN_DB_ENGINE="mariadb" ;; # config-file DB_ENGINE=mariadb: force it explicitly
     mysql)
       # --db mysql covers MariaDB (§7): keep an existing MySQL-family engine,
       # otherwise fall to the MariaDB default.
@@ -156,19 +165,21 @@ resolve_plan() {
   esac
   PLAN_WEB_SERVER="${OPT_WEB:-$REC_WEB_SERVER}"
   PLAN_COMPONENTS="${OPT_COMPONENTS:-$REC_COMPONENTS}"
-  PLAN_AGENT_TYPE="zabbix-agent2"
+  PLAN_AGENT_TYPE="${OPT_AGENT_TYPE:-zabbix-agent2}"
   PLAN_AGENT_PLUGINS=""
   PLAN_TOOLS="no"
-  PLAN_TIMESCALE="no"
+  PLAN_TIMESCALE="${OPT_TIMESCALE:-no}"
   PLAN_SIZING="$REC_SIZING"
-  PLAN_TZ="$REC_TZ"
-  if [[ "$DETECT_FIREWALL" != "none" ]]; then
+  PLAN_TZ="${OPT_TZ:-$REC_TZ}"
+  if [[ -n "${OPT_OPEN_FIREWALL:-}" ]]; then
+    PLAN_OPEN_FIREWALL="$OPT_OPEN_FIREWALL"
+  elif [[ "$DETECT_FIREWALL" != "none" ]]; then
     PLAN_OPEN_FIREWALL="yes" # §12.5: default yes when a firewall is active
   else
     PLAN_OPEN_FIREWALL="no"
   fi
   PLAN_UPDATE="${OPT_UPDATE:-}" # empty = ask once in the flow (§11)
-  PLAN_ZBX_SERVER_IP="127.0.0.1"
+  PLAN_ZBX_SERVER_IP="${OPT_SERVER_IP:-127.0.0.1}"
   PLAN_CREDS_FILE="${OPT_CREDS_FILE:-/root/zbx-install-credentials.txt}"
 }
 

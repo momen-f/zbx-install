@@ -23,6 +23,7 @@ ORDER=(
   lib/detect.sh
   lib/recommend.sh
   lib/creds.sh
+  lib/configfile.sh
   lib/repo.sh
   lib/pkg.sh
   lib/db_mysql.sh

@@ -43,6 +43,14 @@ _pkgmgr_fake_for() {
 }
 
 # zx OSR MEM ARGS... — run the bundle in the trimmed environment.
+#
+# STATE_FILE points at a per-test tmpdir path, never the real
+# /var/lib/zbx-install/state: every test used to rely on that real path
+# being unwritable by a non-root test runner (a silent, accidental "state
+# never persists" — core_state_init's mkdir/touch failures are swallowed by
+# design, §14) which would have broken the moment tests ran as root. Each
+# test gets a fresh, empty, but real and write able state file instead,
+# matching the ZBX_ETC_DIR override pattern already used for config.sh.
 zx() {
   local osr="$1" mem="$2" pm
   shift 2
@@ -52,7 +60,7 @@ zx() {
   [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" DETECT_SKIP_NET=1 \
-    ZBX_ETC_DIR="$ETCDIR" \
+    ZBX_ETC_DIR="$ETCDIR" STATE_FILE="${STATEFILE:-$BATS_TEST_TMPDIR/state}" \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -67,7 +75,7 @@ zxn() {
   [[ -n "$pm" && ! -e "$TOOLDIR/$pm" ]] && fake "$pm" 'exit 0'
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" \
-    ZBX_ETC_DIR="$ETCDIR" \
+    ZBX_ETC_DIR="$ETCDIR" STATE_FILE="${STATEFILE:-$BATS_TEST_TMPDIR/state}" \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -491,14 +499,104 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   [[ "$output" == *"Plan summary (DRY-RUN)"* ]]
 }
 
-@test "--config stub exits 2 with a Phase 7 pointer" {
-  zx os-release.ubuntu2404 meminfo.4gb --config /tmp/answers.conf
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"Phase 7"* ]]
+# --- §18 Phase 7: --config, --uninstall, resume -------------------------------
+
+@test "real run: --config drives a full unattended install with zero prompts" {
+  fake curl "$FAKE_CURL_FRONTEND_200"'
+    exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get "$(mysql_appears_on_install)"'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget.log"; exit 0'
+  fake_db_mysql_success
+  fake_ss_ports
+  cat >"$BATS_TEST_TMPDIR/answers.conf" <<'EOF'
+MODE=express
+DB_ENGINE=mariadb
+WEB_SERVER=apache
+GENERATE_PASSWORDS=yes
+EOF
+  chmod 600 "$BATS_TEST_TMPDIR/answers.conf"
+  # No --yes: --config alone is unattended by definition (§7) — this is the
+  # acceptance test itself (§18: "config-file install with zero prompts").
+  zx os-release.ubuntu2404 meminfo.4gb --config "$BATS_TEST_TMPDIR/answers.conf"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"All checks passed"* ]]
+  run grep '^install -y' "$BATS_TEST_TMPDIR/aptget.log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"zabbix-server-mysql"* ]]
+  [[ "$output" == *"zabbix-apache-conf"* ]]
 }
 
-@test "--uninstall stub exits 0 with a Phase 7 pointer" {
-  zx os-release.ubuntu2404 meminfo.4gb --uninstall
+@test "--config with an unknown key exits 2 naming the file, line, and key" {
+  cat >"$BATS_TEST_TMPDIR/bad.conf" <<'EOF'
+MODE=express
+BOGUS=yes
+EOF
+  chmod 600 "$BATS_TEST_TMPDIR/bad.conf"
+  zx os-release.ubuntu2404 meminfo.4gb --config "$BATS_TEST_TMPDIR/bad.conf"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *":2: unknown key 'BOGUS'"* ]]
+}
+
+@test "--config MODE=agent-only wires ZBX_SERVER_IP/AGENT_TYPE from the file" {
+  cat >"$BATS_TEST_TMPDIR/agent.conf" <<'EOF'
+MODE=agent-only
+ZBX_SERVER_IP=10.0.0.9
+AGENT_TYPE=agent
+EOF
+  chmod 600 "$BATS_TEST_TMPDIR/agent.conf"
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --config "$BATS_TEST_TMPDIR/agent.conf"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Phase 7"* ]]
+  row "Mode:" "agent-only"
+  row "Server IP:" "10.0.0.9"
+  row "Packages:" "zabbix-agent"
+}
+
+@test "real run: --uninstall discovers and removes only zabbix-* packages, keeps DB engine and web server" {
+  fake dpkg-query 'case "$*" in *zabbix*) printf "zabbix-agent2\nzabbix-server-mysql\n" ;; esac'
+  fake apt-get 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget-remove.log"; exit 0'
+  zx os-release.ubuntu2404 meminfo.4gb --uninstall --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Removing: zabbix-agent2 zabbix-server-mysql"* ]]
+  [[ "$output" == *"Kept: database engine, web server"* ]]
+  [[ "$output" == *"Kept: zabbix database/user"* ]]
+  run cat "$BATS_TEST_TMPDIR/aptget-remove.log"
+  [[ "$output" == *"remove -y zabbix-agent2 zabbix-server-mysql"* ]]
+  [[ "$output" != *"mariadb"* ]]
+  [[ "$output" != *"apache"* ]]
+}
+
+@test "real run: --uninstall with nothing installed reports nothing to remove" {
+  fake dpkg-query 'exit 1' # real dpkg-query exits nonzero on no match
+  zx os-release.ubuntu2404 meminfo.4gb --uninstall --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No Zabbix packages found — nothing to remove."* ]]
+}
+
+@test "resume: unattended run picks up after a prior partial failure without needing --resume" {
+  local statefile="$BATS_TEST_TMPDIR/shared-state"
+  fake curl 'exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  # First run: repo succeeds, packages fails — repo=done persists, install stops.
+  fake apt-get 'case "$1" in install) exit 1 ;; *) exit 0 ;; esac'
+  STATEFILE="$statefile" zx os-release.ubuntu2404 meminfo.4gb --express --yes
+  [ "$status" -eq 5 ]
+  run cat "$statefile"
+  [[ "$output" == *"repo=done"* ]]
+
+  # Second run: packages now succeeds. Unattended (--yes, no --resume flag)
+  # must still resume on its own — repo_install's own "already done" guard
+  # (an INFO line, log-file only, not stdout) is the observable proof
+  # repo_install itself was skipped, not re-run.
+  fake curl "$FAKE_CURL_FRONTEND_200"'
+    exit 0'
+  fake apt-get "$(mysql_appears_on_install)exit 0"
+  fake_db_mysql_success
+  fake_ss_ports
+  STATEFILE="$statefile" zx os-release.ubuntu2404 meminfo.4gb --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"All checks passed"* ]]
+  run cat "$BATS_TEST_TMPDIR/zbx.log"
+  [[ "$output" == *"repo already set up (state file) — skipping"* ]]
 }
