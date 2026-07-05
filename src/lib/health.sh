@@ -80,11 +80,19 @@ _health_check_agent_service() {
 _health_check_web_service() {
   local -a units=()
   IFS=' ' read -ra units <<<"$(_services_web_units)"
+  log INFO "DIAG: web units = (${units[*]}) count=${#units[@]}"
   local -a failed=()
   local u
   for u in "${units[@]}"; do
-    _health_wait_active "$u" || failed+=("$u")
+    log INFO "DIAG: checking unit '$u'"
+    if _health_wait_active "$u"; then
+      log INFO "DIAG: '$u' passed"
+    else
+      log INFO "DIAG: '$u' FAILED, rc=$?"
+      failed+=("$u")
+    fi
   done
+  log INFO "DIAG: failed = (${failed[*]+"${failed[*]}"}) count=${#failed[@]}"
   if ((${#failed[@]} == 0)); then
     _health_record "web service (${units[*]})" 0 ""
   else
