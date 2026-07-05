@@ -108,14 +108,18 @@ jobs:
       matrix:
         include:
           # Bare Docker Hub images are far more minimal than a real target
-          # server — ubuntu:24.04 ships without curl or ca-certificates at
-          # all, which detect_network() correctly reports as no connectivity.
-          # `setup` brings each image up to what a real server already has.
+          # server. ubuntu:24.04 ships with no curl/ca-certificates at all
+          # (detect_network() correctly reports no connectivity), so `setup`
+          # brings it up to what a real server already has. rockylinux:9
+          # already ships curl (as curl-minimal) and working certs — its
+          # "Repo reachable: yes" confirmed that before this was ever added —
+          # so it needs no setup; forcing the full curl package actively
+          # breaks it (curl-minimal and curl are mutually-exclusive rpms).
           - image: "ubuntu:24.04"
             setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
           - image: "rockylinux:9"
-            setup: "dnf install -y -q curl ca-certificates"
+            setup: ":"
             verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
     steps:
       - uses: actions/checkout@v4
