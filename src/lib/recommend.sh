@@ -187,7 +187,17 @@ plan_packages() {
     pkgs+=(zabbix-sql-scripts)
   fi
   if plan_has frontend; then
-    pkgs+=(zabbix-frontend-php)
+    # Verified live 2026-07-05: the frontend package is DB-engine-specific
+    # on RHEL/SLES (zabbix-web-mysql / zabbix-web-pgsql) — SPEC.md's "identical
+    # names across families" assumption only holds for apt, which uses the
+    # generic zabbix-frontend-php regardless of DB engine.
+    if [[ "$DETECT_FAMILY" == "debian" ]]; then
+      pkgs+=(zabbix-frontend-php)
+    elif [[ "$PLAN_DB_ENGINE" == "pgsql" ]]; then
+      pkgs+=(zabbix-web-pgsql)
+    else
+      pkgs+=(zabbix-web-mysql)
+    fi
     if [[ "$PLAN_WEB_SERVER" == "nginx" ]]; then
       pkgs+=(zabbix-nginx-conf)
     else

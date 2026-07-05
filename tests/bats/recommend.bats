@@ -127,7 +127,25 @@ rprobe() {
   rprobe 'DETECT_FAMILY=rhel DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=none DETECT_SELINUX=enforcing;
     PLAN_COMPONENTS=server,frontend,agent PLAN_DB_ENGINE=mariadb PLAN_WEB_SERVER=apache;
     plan_packages; printf "%s" "$PLAN_PACKAGES"'
-  [ "$output" = "zabbix-server-mysql zabbix-sql-scripts zabbix-frontend-php zabbix-apache-conf zabbix-agent2 zabbix-selinux-policy mariadb-server httpd" ]
+  [ "$output" = "zabbix-server-mysql zabbix-sql-scripts zabbix-web-mysql zabbix-apache-conf zabbix-agent2 zabbix-selinux-policy mariadb-server httpd" ]
+}
+
+# Regression test: on RHEL/SLES the frontend package is DB-engine-specific
+# (zabbix-web-mysql/-pgsql), not the generic apt-only zabbix-frontend-php —
+# a real CI install on rockylinux:9 failed with "Unable to find a match:
+# zabbix-frontend-php" before this was caught (2026-07-05).
+@test "plan_packages: RHEL frontend package follows the DB engine, not apt's name" {
+  rprobe 'DETECT_FAMILY=rhel DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=apache DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=frontend PLAN_DB_ENGINE=pgsql PLAN_WEB_SERVER=apache;
+    plan_packages; printf "%s" "$PLAN_PACKAGES"'
+  [ "$output" = "zabbix-web-pgsql zabbix-apache-conf" ]
+}
+
+@test "plan_packages: apt frontend package stays generic regardless of DB engine" {
+  rprobe 'DETECT_FAMILY=debian DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=apache DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=frontend PLAN_DB_ENGINE=pgsql PLAN_WEB_SERVER=apache;
+    plan_packages; printf "%s" "$PLAN_PACKAGES"'
+  [ "$output" = "zabbix-frontend-php zabbix-apache-conf" ]
 }
 
 @test "plan_packages: pgsql on RHEL adds postgresql-server" {
@@ -211,7 +229,7 @@ rprobe() {
     PLAN_COMPONENTS=frontend,agent PLAN_DB_ENGINE=mariadb PLAN_WEB_SERVER=nginx;
     PLAN_AGENT_PLUGINS=postgresql,mssql PLAN_TOOLS=yes;
     plan_packages; printf "%s" "$PLAN_PACKAGES"'
-  [ "$output" = "zabbix-frontend-php zabbix-nginx-conf zabbix-agent2 zabbix-agent2-plugin-postgresql zabbix-agent2-plugin-mssql zabbix-get zabbix-sender nginx" ]
+  [ "$output" = "zabbix-web-mysql zabbix-nginx-conf zabbix-agent2 zabbix-agent2-plugin-postgresql zabbix-agent2-plugin-mssql zabbix-get zabbix-sender nginx" ]
 }
 
 # --- plan_port_warnings: only ports the selected components need ------------------

@@ -85,9 +85,11 @@ _pkg_install_cmd() {
 # module header note above); generic otherwise.
 _pkg_failure_hint() {
   # Global IFS is $'\n\t' (core.sh) — force a space join for the word match.
+  # The frontend package is zabbix-web-mysql/-pgsql on RHEL, not
+  # zabbix-frontend-php (that name is apt-only — verified live 2026-07-05).
   local IFS=' '
   if [[ "$DETECT_FAMILY" == "rhel" && "$DETECT_OS_MAJOR" == "8" ]] &&
-    [[ " $* " == *" zabbix-frontend-php "* ]]; then
+    [[ " $* " == *" zabbix-web-mysql "* || " $* " == *" zabbix-web-pgsql "* ]]; then
     printf 'package transaction failed — likely cause: RHEL 8'\''s native PHP tops out at 7.4, but this Zabbix frontend needs PHP >= 8.0.0. Add the Remi repository first (https://rpms.remirepo.net) and enable a php:remi-8.x+ stream, then retry.'
   else
     printf 'package transaction failed (%s) — see the log' "$DETECT_PKGMGR"

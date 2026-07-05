@@ -11,13 +11,22 @@ pprobe() {
 
 # Regression test: pkg.sh's failure-hint word match uses $* under core.sh's
 # global IFS=$'\n\t' (no space) — without a scoped `local IFS=' '`, the
-# space-padded "*\" zabbix-frontend-php \"*" glob would never match, silently
+# space-padded "*\" zabbix-web-mysql \"*" glob would never match, silently
 # losing the EL8/Remi-specific guidance and falling back to the generic hint.
-@test "_pkg_failure_hint gives the Remi hint for EL8 + frontend" {
-  pprobe 'DETECT_FAMILY=rhel DETECT_OS_MAJOR=8 DETECT_PKGMGR=dnf; _pkg_failure_hint zabbix-agent2 zabbix-frontend-php zabbix-apache-conf'
+# Note: the RHEL frontend package is zabbix-web-mysql/-pgsql, NOT
+# zabbix-frontend-php (that name is apt-only — verified live 2026-07-05,
+# after a real CI install on rockylinux:9 failed on the wrong name).
+@test "_pkg_failure_hint gives the Remi hint for EL8 + frontend (mysql)" {
+  pprobe 'DETECT_FAMILY=rhel DETECT_OS_MAJOR=8 DETECT_PKGMGR=dnf; _pkg_failure_hint zabbix-agent2 zabbix-web-mysql zabbix-apache-conf'
   [ "$status" -eq 0 ]
   [[ "$output" == *"Remi"* ]]
   [[ "$output" == *"PHP >= 8.0.0"* ]]
+}
+
+@test "_pkg_failure_hint gives the Remi hint for EL8 + frontend (pgsql)" {
+  pprobe 'DETECT_FAMILY=rhel DETECT_OS_MAJOR=8 DETECT_PKGMGR=dnf; _pkg_failure_hint zabbix-agent2 zabbix-web-pgsql zabbix-apache-conf'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Remi"* ]]
 }
 
 @test "_pkg_failure_hint is generic for EL8 without the frontend package" {
@@ -28,7 +37,7 @@ pprobe() {
 }
 
 @test "_pkg_failure_hint is generic on EL9 even with the frontend package" {
-  pprobe 'DETECT_FAMILY=rhel DETECT_OS_MAJOR=9 DETECT_PKGMGR=dnf; _pkg_failure_hint zabbix-agent2 zabbix-frontend-php'
+  pprobe 'DETECT_FAMILY=rhel DETECT_OS_MAJOR=9 DETECT_PKGMGR=dnf; _pkg_failure_hint zabbix-agent2 zabbix-web-mysql'
   [ "$status" -eq 0 ]
   [[ "$output" != *"Remi"* ]]
 }
