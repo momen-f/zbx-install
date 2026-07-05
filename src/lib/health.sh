@@ -42,7 +42,13 @@ _health_record() {
 _health_wait_active() {
   local unit="$1" waited=0
   while true; do
-    systemctl is-active --quiet "$unit" 2>/dev/null && return 0
+    # TEMPORARY diagnostic (remove once the CI timing question is settled).
+    # rc, not the printed text, is the real is-active contract (matches
+    # --quiet) — the text is only logged for visibility.
+    local state rc
+    state="$(systemctl is-active "$unit" 2>&1)" && rc=0 || rc=$?
+    log INFO "DIAG: $unit is-active (attempt $((waited + 1))) -> '$state' (rc=$rc)"
+    ((rc == 0)) && return 0
     ((waited >= ZBX_HEALTH_SERVICE_RETRY_SECONDS)) && return 1
     sleep 1
     waited=$((waited + 1))
