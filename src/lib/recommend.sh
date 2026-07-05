@@ -308,8 +308,14 @@ plan_report() {
     ui_row "Server IP:" "$PLAN_ZBX_SERVER_IP"
   fi
   ui_row "Packages:" "$PLAN_PACKAGES"
-  local cred="prompt at install (Phase 4)"
-  if [[ "${OPT_GENPASS:-0}" == "1" ]]; then cred="auto-generate"; fi
+  local cred="not needed (no database in this plan)"
+  if plan_has server; then
+    if [[ "$UNATTENDED" == "1" || "${OPT_GENPASS:-0}" == "1" ]]; then
+      cred="auto-generated"
+    else
+      cred="collected (hidden)"
+    fi
+  fi
   ui_row "Credentials:" "$cred; summary file: $PLAN_CREDS_FILE"
   ui_row "Log file:" "$LOG_FILE"
   plan_report_warnings
@@ -380,7 +386,7 @@ _plan_step() {
 
 plan_pipeline_preview() {
   _PLAN_STEP_N=1
-  printf '\n%sPipeline for this plan%s (execution lands in Phases 3-6):\n' "$C_BOLD" "$C_RESET"
+  printf '\n%sPipeline for this plan%s (config/firewall/services/health land in Phases 5-6):\n' "$C_BOLD" "$C_RESET"
   if [[ "${PLAN_UPDATE:-no}" == "yes" ]]; then
     _plan_step "update" "full system update via $DETECT_PKGMGR (§11)"
   fi

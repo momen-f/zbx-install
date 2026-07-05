@@ -15,7 +15,7 @@ setup() {
   TOOLDIR="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$TOOLDIR"
   local t src
-  for t in date awk sed grep df uname head tail tr cut cat sleep tput wc mktemp; do
+  for t in date awk sed grep df uname head tail tr cut cat sleep tput wc mktemp chmod; do
     src="$(command -v "$t" 2>/dev/null || true)"
     if [[ -n "$src" ]]; then ln -sf "$src" "$TOOLDIR/$t"; fi
   done
@@ -176,11 +176,32 @@ step() {
 # faking curl/dpkg/apt-get/apt-cache to record their argv and succeed, so the
 # real repo_install/pkg_install code paths run for real without touching the
 # network or a real package manager.
+# fake_db_mysql_success — a real (non-dry-run) express run now continues past
+# packages into db_mysql_provision; fake systemctl for unit detection+enable.
+# mysql itself is deliberately NOT faked into existence up front — see
+# MYSQL_APPEARS_ON_INSTALL below.
+fake_db_mysql_success() {
+  fake systemctl 'case "$1" in list-unit-files) echo "mariadb.service enabled" ;; esac; exit 0'
+}
+
+# mysql_appears_on_install — echoes a snippet for a test's own apt-get fake
+# body: drops a working mysql client into the tool farm as a side effect of
+# apt-get being invoked. Faking mysql as present from the start would
+# corrupt detect_existing()'s pre-install scan into finding an "existing"
+# engine and suppressing mariadb-server from the plan — on a real target the
+# client genuinely doesn't exist until the package installs it, i.e. strictly
+# after detect ran and before db_mysql_provision needs it. A function (not a
+# plain variable) because $TOOLDIR is only set inside setup(), per test.
+mysql_appears_on_install() {
+  printf 'printf "#!/bin/bash\\nexit 0\\n" > "%s/mysql"; chmod +x "%s/mysql"; ' "$TOOLDIR" "$TOOLDIR"
+}
+
 @test "real run: the resolved Zabbix repo URL is actually fetched" {
   fake curl 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/curl.log"; exit 0'
   fake dpkg 'exit 0'
-  fake apt-get 'exit 0'
+  fake apt-get "$(mysql_appears_on_install)exit 0"
   fake apt-cache 'exit 0'
+  fake_db_mysql_success
   zx os-release.ubuntu2404 meminfo.4gb --express --yes
   [ "$status" -eq 0 ]
   run cat "$BATS_TEST_TMPDIR/curl.log"
@@ -191,7 +212,8 @@ step() {
   fake curl 'exit 0'
   fake dpkg 'exit 0'
   fake apt-cache 'exit 0'
-  fake apt-get 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget.log"; exit 0'
+  fake apt-get "$(mysql_appears_on_install)"'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget.log"; exit 0'
+  fake_db_mysql_success
   zx os-release.ubuntu2404 meminfo.4gb --express --yes
   [ "$status" -eq 0 ]
   run grep '^install -y' "$BATS_TEST_TMPDIR/aptget.log"
@@ -214,6 +236,27 @@ step() {
   zx os-release.ubuntu2404 meminfo.4gb --express --yes
   [ "$status" -eq 5 ]
   [[ "$output" == *"package transaction failed"* ]]
+}
+
+@test "real run: --db pgsql provisions via sudo -u postgres; the generated password reaches stdin only, never argv or the log" {
+  fake curl 'exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get 'exit 0'
+  fake systemctl 'exit 0'
+  # A deterministic, greppable "generated" password (§10 §18 Phase 4
+  # acceptance: secrets never in ps/logs — grep the log in the test).
+  fake openssl 'printf "E2EMARKERPASSWORDXXXXXXXXXX"'
+  fake sudo 'echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/sudo.log"; cat >>"'"$BATS_TEST_TMPDIR"'/sudo-stdin.log"; exit 0'
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes --db pgsql --generate-passwords
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Repo, packages, and the database are provisioned."* ]]
+  run cat "$BATS_TEST_TMPDIR/sudo-stdin.log"
+  [[ "$output" == *"ALTER USER zabbix PASSWORD 'E2EMARKERPASSWORD"* ]]
+  run cat "$BATS_TEST_TMPDIR/sudo.log"
+  [[ "$output" != *"E2EMARKERPASSWORD"* ]]
+  run cat "$BATS_TEST_TMPDIR/zbx.log"
+  [[ "$output" != *"E2EMARKERPASSWORD"* ]]
 }
 
 @test "real run: a repo probe failure exits 5 unattended with a repo-context message" {
@@ -305,13 +348,23 @@ step() {
   [ "$status" -eq 2 ]
 }
 
-@test "credentials row reflects --generate-passwords and --creds-file" {
+# --yes always implies UNATTENDED=1 (§14), so creds_collect always
+# auto-generates here regardless of --generate-passwords — there is no way
+# to interactively prompt in an unattended run. --creds-file only changes
+# the summary file path.
+@test "credentials row reflects auto-generation under --yes, and --creds-file" {
   zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes --generate-passwords
   [ "$status" -eq 0 ]
-  row "Credentials:" "auto-generate; summary file: /root/zbx-install-credentials.txt"
+  row "Credentials:" "auto-generated; summary file: /root/zbx-install-credentials.txt"
   zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes --creds-file /tmp/creds.txt
   [ "$status" -eq 0 ]
-  row "Credentials:" "prompt at install (Phase 4); summary file: /tmp/creds.txt"
+  row "Credentials:" "auto-generated; summary file: /tmp/creds.txt"
+}
+
+@test "credentials row: agent-only mode needs no database credentials" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --agent-only --yes
+  [ "$status" -eq 0 ]
+  row "Credentials:" "not needed (no database in this plan); summary file: /root/zbx-install-credentials.txt"
 }
 
 @test "unattended existing-Zabbix guard exits 3 (fake systemctl reports units)" {

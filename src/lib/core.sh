@@ -106,7 +106,7 @@ log() {
 # run CMD... — log the (redacted) command, then execute it unless DRY_RUN=1.
 # Returns the command's exit status so callers can route failures to err_menu.
 run() {
-  local shown
+  local shown rc
   shown="$(core_redact <<<"$*")"
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '  + %s\n' "$shown"
@@ -114,7 +114,12 @@ run() {
     return 0
   fi
   log INFO "RUN: $*"
-  "$@" >>"$LOG_FILE" 2>&1
+  # The command's OWN output is piped through core_redact too, not just the
+  # announced command line — a DB client echoing a bad statement back (e.g.
+  # a syntax error near a password literal) must not leak it into the log.
+  "$@" 2>&1 | core_redact >>"$LOG_FILE"
+  rc="${PIPESTATUS[0]}"
+  return "$rc"
 }
 
 # --- state file --------------------------------------------------------------
@@ -172,13 +177,15 @@ die() {
 
 # _errmenu_opts_for STEP — which letters are enabled for this step's menu, per
 # the §14 per-context table (Exit is implicit and always available). Unlisted
-# steps get the generic fallback. v (pick a different Zabbix version) and
-# s (skip) are step-specific: skip must never appear for repo/packages/db
-# (§14: "never" — a half-installed repo or package set can't be skipped over).
+# steps get the generic fallback. v (pick a different Zabbix version),
+# c (re-enter credentials), and s (skip) are step-specific: skip must never
+# appear for repo/packages/db (§14: "never" — a half-installed repo, package
+# set, or DB can't be skipped over).
 _errmenu_opts_for() {
   case "$1" in
     repo) echo "rvl" ;;
     packages) echo "rl" ;;
+    db) echo "rcl" ;;
     *) echo "rlsb" ;;
   esac
 }
@@ -187,6 +194,7 @@ _errmenu_print_options() {
   local opts="$1" line=""
   [[ "$opts" == *r* ]] && line+="[r] Retry  "
   [[ "$opts" == *v* ]] && line+="[v] Pick a different Zabbix version  "
+  [[ "$opts" == *c* ]] && line+="[c] Re-enter credentials  "
   [[ "$opts" == *l* ]] && line+="[l] View log (last 50)  "
   [[ "$opts" == *s* ]] && line+="[s] Skip*  "
   [[ "$opts" == *b* ]] && line+="[b] Back to plan  "
@@ -229,6 +237,11 @@ err_menu() {
         log INFO "user switched to Zabbix version $PLAN_ZBX_VERSION for the retry"
         return "$ERRMENU_RETRY"
         ;;
+      c | C)
+        [[ "$opts" == *c* ]] || continue
+        creds_reenter_admin_password
+        return "$ERRMENU_RETRY"
+        ;;
       l | L)
         [[ "$opts" == *l* ]] || continue
         core_tail_log 50 >&2
@@ -264,6 +277,13 @@ core_on_exit() {
       rm -f "$f" 2>/dev/null || true
     fi
   done
+  # Extension hook, not a hardcoded dependency: core.sh stays DB-engine-
+  # agnostic, but db_mysql.sh (if loaded) can register cleanup here for
+  # settings that must be restored on every exit path, not just success —
+  # e.g. log_bin_trust_function_creators (§12.3/§14).
+  if declare -f db_mysql_cleanup_trust_flag >/dev/null 2>&1; then
+    db_mysql_cleanup_trust_flag
+  fi
 }
 
 core_on_int() {

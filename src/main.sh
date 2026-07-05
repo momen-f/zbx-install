@@ -19,10 +19,16 @@ source "$_SRC_DIR/lib/ui.sh" # @dev-source
 source "$_SRC_DIR/lib/detect.sh" # @dev-source
 # shellcheck source=lib/recommend.sh
 source "$_SRC_DIR/lib/recommend.sh" # @dev-source
+# shellcheck source=lib/creds.sh
+source "$_SRC_DIR/lib/creds.sh" # @dev-source
 # shellcheck source=lib/repo.sh
 source "$_SRC_DIR/lib/repo.sh" # @dev-source
 # shellcheck source=lib/pkg.sh
 source "$_SRC_DIR/lib/pkg.sh" # @dev-source
+# shellcheck source=lib/db_mysql.sh
+source "$_SRC_DIR/lib/db_mysql.sh" # @dev-source
+# shellcheck source=lib/db_pgsql.sh
+source "$_SRC_DIR/lib/db_pgsql.sh" # @dev-source
 
 # Version/date: injected by build.sh; fall back to the VERSION file in dev.
 main_version() {
@@ -451,6 +457,7 @@ prepare_plan() {
   esac
   resolve_update
   resolve_tz
+  creds_collect
 }
 
 # plan_confirm — §1.7: nothing executes before explicit confirmation.
@@ -464,25 +471,39 @@ plan_confirm() {
 }
 
 # run_pipeline — execute the steps this build actually implements (update,
-# repo, packages — Phase 3). Later phases (DB, config, firewall, services,
-# health) only ever appear in plan_pipeline_preview until their own phase
-# lands; run() itself no-ops-and-prints every real command under DRY_RUN, so
-# this is safe to call unconditionally and doubles as the detailed dry-run
-# preview for the steps it covers.
+# repo, packages, database — Phases 3-4). Later phases (config, firewall,
+# services, health) only ever appear in plan_pipeline_preview until their own
+# phase lands; run() itself no-ops-and-prints every real command under
+# DRY_RUN, so this is safe to call unconditionally and doubles as the
+# detailed dry-run preview for the steps it covers.
 run_pipeline() {
   core_state_init
-  local label="Running the implemented steps (repo, packages)"
+  local label="Running the implemented steps (repo, packages"
+  if plan_has server; then label+=", database"; fi
+  label+=")"
   [[ "$DRY_RUN" == "1" ]] && label+=" — dry-run"
   printf '\n%s%s%s\n' "$C_BOLD" "$label" "$C_RESET"
+
   pkg_update
   repo_install
   local -a pkgs=()
   IFS=' ' read -ra pkgs <<<"$PLAN_PACKAGES"
   pkg_install "${pkgs[@]}"
+
+  if plan_has server; then
+    case "$PLAN_DB_ENGINE" in
+      pgsql) db_pgsql_provision ;;
+      *) db_mysql_provision ;;
+    esac
+    creds_write_summary
+  fi
+
   if [[ "$DRY_RUN" != "1" ]]; then
-    printf '\n%sRepo and packages installed.%s DB provisioning, config, firewall,\n' \
-      "$C_GREEN" "$C_RESET"
-    printf 'services, and health checks are not implemented yet (SPEC §18 Phases 4-6).\n'
+    local done_msg="Repo and packages installed."
+    if plan_has server; then done_msg="Repo, packages, and the database are provisioned."; fi
+    printf '\n%s%s%s Config, firewall, services, and health checks are not\n' \
+      "$C_GREEN" "$done_msg" "$C_RESET"
+    printf 'implemented yet (SPEC §18 Phases 5-6).\n'
   fi
 }
 

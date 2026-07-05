@@ -25,6 +25,39 @@ CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
   [ "$output" = "hello" ]
 }
 
+# Regression test: run() used to redact only the announced command line,
+# piping the command's OWN stdout/stderr straight to the log file. A command
+# that echoes a secret back (e.g. a DB client's syntax error naming the bad
+# value) would leak it into the log unredacted — a real risk once Phase 4
+# starts running mysql/psql commands near real passwords.
+@test "run() redacts the invoked command's own output, not just the announced line" {
+  run bash -c '
+    source "'"$CORE"'"
+    core_color_init
+    core_log_init
+    core_register_secret "s3cr3t-pass"
+    fake_cmd() { printf "error: bad value s3cr3t-pass\n"; return 1; }
+    run fake_cmd || true
+    cat "$LOG_FILE"
+  '
+  [[ "$output" == *"error: bad value ********"* ]]
+  [[ "$output" != *"s3cr3t-pass"* ]]
+}
+
+@test "run() still returns the invoked command's real exit status" {
+  run bash -c '
+    source "'"$CORE"'"
+    core_color_init
+    core_log_init
+    fake_ok() { return 0; }
+    fake_fail() { return 7; }
+    rc=0; run fake_ok || rc=$?; echo "ok=$rc"
+    rc=0; run fake_fail || rc=$?; echo "fail=$rc"
+  '
+  [[ "$output" == *"ok=0"* ]]
+  [[ "$output" == *"fail=7"* ]]
+}
+
 @test "core_exit_code_for maps steps to Appendix B codes" {
   run bash -c 'source "'"$CORE"'"; for s in detect network repo packages health db other; do core_exit_code_for "$s"; done | paste -sd" " -'
   [ "$status" -eq 0 ]
