@@ -142,18 +142,11 @@ jobs:
             # A real target wouldn't have that clash, so disable EPEL here
             # rather than teach the installer to manage third-party repos it
             # didn't add (same call as the EL8/Remi and TimescaleDB cases).
-            # Verified live and reproduced outside CI on 2026-07-06 (plain
-            # `docker run --platform linux/amd64 rockylinux:9`, no Zabbix repo
-            # involved at all): `dnf module list mariadb` marks 10.11 as the
-            # [d]efault stream, but a plain `dnf install mariadb-server` still
-            # resolves to the newer 11.8.8 build, whose module metadata isn't
-            # valid on the mirror ("No available modular metadata for modular
-            # package") — `dnf clean all`+`makecache` does NOT fix this (it's
-            # not a local cache staleness issue, the live repodata itself is
-            # inconsistent). Explicitly enabling the marked-default stream
-            # before installing sidesteps the broken 11.8 resolution entirely
-            # and is always correct regardless of whether this bug persists.
-            setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true; dnf module enable mariadb:10.11 -y >/dev/null 2>&1 || true"
+            # (No dnf module workaround needed here anymore — the mariadb
+            # module-stream bug this used to paper over is now fixed for
+            # real in db_mysql_module_enable(), db_mysql.sh, and this job
+            # is what actually exercises that fix on every push.)
+            setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true"
             # zabbix-frontend-php doesn't exist on RHEL — the frontend
             # package there is zabbix-web-mysql (DB-engine-specific).
             verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-web-mysql"

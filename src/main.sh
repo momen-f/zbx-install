@@ -541,6 +541,7 @@ run_pipeline() {
 
   pkg_update
   repo_install
+  db_mysql_module_enable
   local -a pkgs=()
   IFS=' ' read -ra pkgs <<<"$PLAN_PACKAGES"
   pkg_install ${pkgs[@]+"${pkgs[@]}"}

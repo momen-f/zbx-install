@@ -82,6 +82,10 @@ pkg_update() {
 # package-specific). A cache refresh immediately before the transaction
 # resolves the mismatch; best-effort, since a transient failure here
 # shouldn't preempt the real install attempt or its own error message.
+# This is a distinct issue from the mariadb module-stream ambiguity that
+# db_mysql_module_enable() guards against (see that function's header) —
+# that one isn't a cache-staleness problem at all, a fresh cache resolves
+# to the broken stream just as reliably as a stale one.
 _pkg_install_cmd() {
   case "$DETECT_PKGMGR" in
     apt) run apt-get install -y "$@" ;;

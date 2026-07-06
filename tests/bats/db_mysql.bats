@@ -4,10 +4,18 @@
 # handful of tests that need systemctl/mysql, built fresh per test.
 
 CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
+DETECT="${BATS_TEST_DIRNAME}/../../src/lib/detect.sh"
+REC="${BATS_TEST_DIRNAME}/../../src/lib/recommend.sh"
 DBM="${BATS_TEST_DIRNAME}/../../src/lib/db_mysql.sh"
 
 mprobe() {
   run bash -c 'source "'"$CORE"'"; source "'"$DBM"'"; '"$1"
+}
+
+# db_mysql_module_enable also needs plan_has (recommend.sh) — a separate
+# probe so the other tests' sourcing footprint stays unchanged.
+mrprobe() {
+  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'"; source "'"$REC"'"; source "'"$DBM"'"; '"$1"
 }
 
 # fake_tool_dir NAME BODY... — build a tiny PATH dir with one or more fakes;
@@ -108,4 +116,113 @@ fake_tool() {
   mprobe 'DRY_RUN=0; _ZBX_MYSQL_TRUST_TOGGLED=0; db_mysql_cleanup_trust_flag; echo ok'
   [ "$status" -eq 0 ]
   [[ "$output" == *"ok"* ]]
+}
+
+# Regression tests (2026-07-06): a live Rocky 9 bug where a plain
+# `dnf install mariadb-server` resolves to a broken non-default module
+# stream (see db_mysql.sh's header comment on _db_mysql_mariadb_module_stream
+# for the full story). These fakes reproduce the exact `dnf module list`
+# text shape seen on real Rocky 9 (no stream-level [d], only 10.11 has a
+# default profile) and real AlmaLinux 8 (10.3 carries a real stream-level
+# [d]), captured verbatim from live containers, not guessed.
+
+@test "_db_mysql_mariadb_module_stream picks the stream with a default profile when no stream is flagged default (Rocky 9 shape)" {
+  local d="$BATS_TEST_TMPDIR/t6"
+  fake_tool "$d" dnf '
+    if [[ "$1 $2 $3" == "-y module list" ]]; then
+      printf "Name    Stream Profiles                   Summary\nmariadb 10.11  client, galera, server [d] MariaDB Module\nmariadb 11.8   client, galera, server     MariaDB Module\n"
+    fi
+    exit 0
+  '
+  mprobe 'PATH="'"$d"':$PATH" _db_mysql_mariadb_module_stream'
+  [ "$status" -eq 0 ]
+  [ "$output" = "10.11" ]
+}
+
+@test "_db_mysql_mariadb_module_stream prefers a real stream-level [d] flag when one exists (AlmaLinux 8 shape)" {
+  local d="$BATS_TEST_TMPDIR/t7"
+  fake_tool "$d" dnf '
+    if [[ "$1 $2 $3" == "-y module list" ]]; then
+      printf "Name    Stream   Profiles                   Summary\nmariadb 10.3 [d] client, galera, server [d] MariaDB Module\nmariadb 10.5     client, galera, server [d] MariaDB Module\nmariadb 10.11    client, galera, server [d] MariaDB Module\n"
+    fi
+    exit 0
+  '
+  mprobe 'PATH="'"$d"':$PATH" _db_mysql_mariadb_module_stream'
+  [ "$status" -eq 0 ]
+  [ "$output" = "10.3" ]
+}
+
+@test "_db_mysql_mariadb_module_stream fails (like _db_mysql_unit_name) when dnf reports no mariadb module at all" {
+  local d="$BATS_TEST_TMPDIR/t8"
+  fake_tool "$d" dnf 'exit 1'
+  mprobe 'PATH="'"$d"':$PATH" _db_mysql_mariadb_module_stream'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "db_mysql_module_enable enables the resolved stream for a fresh dnf+mariadb+server plan" {
+  local d="$BATS_TEST_TMPDIR/t9"
+  fake_tool "$d" dnf '
+    if [[ "$1 $2 $3" == "-y module list" ]]; then
+      printf "Name    Stream Profiles                   Summary\nmariadb 10.11  client, galera, server [d] MariaDB Module\nmariadb 11.8   client, galera, server     MariaDB Module\n"
+    elif [[ "$1 $2" == "module enable" ]]; then
+      echo "ENABLE:$3" >>"'"$BATS_TEST_TMPDIR"'/dnf-calls.log"
+    fi
+    exit 0
+  '
+  rm -f "$BATS_TEST_TMPDIR/dnf-calls.log"
+  mrprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    DETECT_PKGMGR=dnf; DETECT_DB_PRESENT=none; PLAN_DB_ENGINE=mariadb; PLAN_COMPONENTS=server;
+    db_mysql_module_enable'
+  [ "$status" -eq 0 ]
+  run cat "$BATS_TEST_TMPDIR/dnf-calls.log"
+  [[ "$output" == "ENABLE:mariadb:10.11" ]]
+}
+
+@test "db_mysql_module_enable does nothing on apt/zypper targets" {
+  local d="$BATS_TEST_TMPDIR/t10"
+  fake_tool "$d" dnf 'echo "SHOULD NOT RUN" >>"'"$BATS_TEST_TMPDIR"'/dnf-calls.log"; exit 0'
+  rm -f "$BATS_TEST_TMPDIR/dnf-calls.log"
+  mrprobe 'DRY_RUN=0; PATH="'"$d"':$PATH";
+    DETECT_PKGMGR=apt; PLAN_DB_ENGINE=mariadb; PLAN_COMPONENTS=server;
+    db_mysql_module_enable; echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done"* ]]
+  [ ! -f "$BATS_TEST_TMPDIR/dnf-calls.log" ]
+}
+
+@test "db_mysql_module_enable does nothing for a non-mariadb engine" {
+  local d="$BATS_TEST_TMPDIR/t11"
+  fake_tool "$d" dnf 'echo "SHOULD NOT RUN" >>"'"$BATS_TEST_TMPDIR"'/dnf-calls.log"; exit 0'
+  rm -f "$BATS_TEST_TMPDIR/dnf-calls.log"
+  mrprobe 'DRY_RUN=0; PATH="'"$d"':$PATH";
+    DETECT_PKGMGR=dnf; PLAN_DB_ENGINE=pgsql; PLAN_COMPONENTS=server;
+    db_mysql_module_enable; echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done"* ]]
+  [ ! -f "$BATS_TEST_TMPDIR/dnf-calls.log" ]
+}
+
+@test "db_mysql_module_enable does nothing when mariadb is already present" {
+  local d="$BATS_TEST_TMPDIR/t12"
+  fake_tool "$d" dnf 'echo "SHOULD NOT RUN" >>"'"$BATS_TEST_TMPDIR"'/dnf-calls.log"; exit 0'
+  rm -f "$BATS_TEST_TMPDIR/dnf-calls.log"
+  mrprobe 'DRY_RUN=0; PATH="'"$d"':$PATH";
+    DETECT_PKGMGR=dnf; DETECT_DB_PRESENT=mariadb; PLAN_DB_ENGINE=mariadb; PLAN_COMPONENTS=server;
+    db_mysql_module_enable; echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done"* ]]
+  [ ! -f "$BATS_TEST_TMPDIR/dnf-calls.log" ]
+}
+
+@test "db_mysql_module_enable does nothing when the plan has no server component" {
+  local d="$BATS_TEST_TMPDIR/t13"
+  fake_tool "$d" dnf 'echo "SHOULD NOT RUN" >>"'"$BATS_TEST_TMPDIR"'/dnf-calls.log"; exit 0'
+  rm -f "$BATS_TEST_TMPDIR/dnf-calls.log"
+  mrprobe 'DRY_RUN=0; PATH="'"$d"':$PATH";
+    DETECT_PKGMGR=dnf; DETECT_DB_PRESENT=none; PLAN_DB_ENGINE=mariadb; PLAN_COMPONENTS=agent;
+    db_mysql_module_enable; echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done"* ]]
+  [ ! -f "$BATS_TEST_TMPDIR/dnf-calls.log" ]
 }

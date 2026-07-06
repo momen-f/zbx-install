@@ -12,6 +12,68 @@
 #             the clear — passwords go in via a defaults-extra-file or stdin,
 #             matching §10.
 
+# --- dnf module stream (§15) --------------------------------------------------
+# _db_mysql_mariadb_module_stream — echo the mariadb dnf module stream to
+# enable before installing mariadb-server, or nothing if no sensible pick
+# exists (caller no-ops in that case; a plain install still runs its own
+# course). apt/zypper never call this — dnf modules are a dnf-only concept.
+#
+# Live bug, reproduced 2026-07-06 on a bare `rockylinux:9` container (no
+# Zabbix repo involved): AppStream's mariadb module currently ships two
+# streams, 10.11 and 11.8, but its module-defaults metadata sets no
+# top-level `stream:` at all (confirmed by downloading and reading the real
+# repodata modules.yaml — the modulemd-defaults document for mariadb has
+# only `profiles: {10.11: [server]}`, no `stream:` key). With no stream
+# pre-enabled, a plain `dnf install mariadb-server` resolves across every
+# available stream by highest NEVRA and lands on 11.8, whose modular
+# metadata is currently broken on Rocky's live mirrors: "No available
+# modular metadata for modular package ..., it cannot be installed on the
+# system" — surfaces at the transaction-check step, after every package
+# (including the broken one) has already downloaded. `dnf clean all` +
+# `makecache` does NOT fix this; it's not a local cache staleness issue,
+# the live repodata itself is inconsistent. mysql-server and postgresql
+# don't hit this — verified live the same day, neither has more than one
+# viable stream in play on EL9's AppStream today.
+#
+# There being no `stream:` key means there is nothing to dynamically read
+# as "the marked default" — the closest real signal dnf exposes is which
+# stream(s), if any, carry a `[d]`-flagged profile in `dnf module list`
+# output (10.11 does, 11.8 doesn't). Preference order below: an actual
+# stream-level [d] flag first (EL8's mariadb module sets one for real —
+# this keeps working unchanged if EL9's metadata ever grows one too);
+# else the stream with a default profile marked; else the lowest version,
+# so a newer-but-broken stream never wins by default. `$3 == "[d]"` (not
+# "line contains [d]") specifically targets the Stream column — every
+# stream's Profiles column routinely carries its own `[d]` too and would
+# otherwise make every row look tied.
+_db_mysql_mariadb_module_stream() {
+  local stream
+  stream="$(dnf -y module list mariadb 2>/dev/null | awk '
+    $1 == "mariadb" {
+      streamdef = ($3 == "[d]") ? 1 : 0
+      profdef = ($0 ~ /\[d\]/) ? 1 : 0
+      print $2, streamdef, profdef
+    }
+  ' | sort -k2,2rn -k3,3rn -k1,1V | awk 'NR==1 { print $1 }')" || true
+  [[ -n "$stream" ]] && printf '%s' "$stream"
+}
+
+# db_mysql_module_enable — enable the right mariadb dnf module stream before
+# pkg_install runs (see the function above). No-op on apt/zypper, non-
+# mariadb engines, or when mariadb is already present (pkg_install won't
+# try to install it in that case either — same condition as
+# recommend.sh's _plan_db_web_packages).
+db_mysql_module_enable() {
+  [[ "$DETECT_PKGMGR" == "dnf" ]] || return 0
+  [[ "$PLAN_DB_ENGINE" == "mariadb" ]] || return 0
+  plan_has server || return 0
+  [[ ",${DETECT_DB_PRESENT:-}," != *",$PLAN_DB_ENGINE,"* ]] || return 0
+  local stream
+  stream="$(_db_mysql_mariadb_module_stream)" || true
+  [[ -n "$stream" ]] || return 0
+  run dnf module enable "mariadb:${stream}" -y || true
+}
+
 # --- unit + auth resolution ----------------------------------------------------
 # _db_mysql_unit_name — first of mariadb/mysqld/mysql that systemd knows
 # about (§12.3 point 1 — the unit name varies by distro/package).
