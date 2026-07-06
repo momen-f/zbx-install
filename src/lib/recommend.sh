@@ -477,7 +477,15 @@ plan_pipeline_preview() {
   if [[ "$PLAN_OPEN_FIREWALL" == "yes" || "$DETECT_SELINUX" == "enforcing" ]]; then
     _plan_step "firewall" "open ports via $DETECT_FIREWALL / set SELinux booleans (§12.5)"
   fi
-  _plan_step "services" "enable & start: DB -> zabbix-server -> web -> agent (§12.6)"
+  if plan_has proxy; then
+    if [[ "$PLAN_DB_ENGINE" == "sqlite3" ]]; then
+      _plan_step "services" "enable & start: zabbix-proxy (§12.6)"
+    else
+      _plan_step "services" "enable & start: DB -> zabbix-proxy (§12.6)"
+    fi
+  else
+    _plan_step "services" "enable & start: DB -> zabbix-server -> web -> agent (§12.6)"
+  fi
   _plan_step "health" "run the 9 post-install checks (§13)"
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '\nDRY-RUN: no commands were executed. Re-run without --dry-run to install.\n'

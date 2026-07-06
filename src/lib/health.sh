@@ -83,14 +83,28 @@ _health_check_web_service() {
 
 # _health_check_port PORT LABEL HINT — "non-empty" per §13 means ss printed
 # more than just its own header line.
+#
+# Poll rather than snapshot: `systemctl is-active` can report a unit active
+# before its main process has actually bound the listening socket. A
+# sqlite3-backed proxy is the worst case — on first start it creates and
+# populates its entire embedded database, then opens the trapper port only
+# once that finishes, several seconds after the service is "active". A single
+# instantaneous ss check therefore races the daemon and reports a false down.
+# Retry up to ZBX_HEALTH_PORT_TRIES times (~1s apart, same ~15s budget as
+# services.sh's own is-active wait, §12.6); tests set it to 1 for a single
+# snapshot.
 _health_check_port() {
-  local port="$1" label="$2" hint="$3" n
-  n="$(ss -ltn "sport = :$port" 2>/dev/null | wc -l)" || true
-  if ((n > 1)); then
-    _health_record "$label (port $port)" 0 ""
-  else
-    _health_record "$label (port $port)" 1 "$hint"
-  fi
+  local port="$1" label="$2" hint="$3" n i
+  local tries="${ZBX_HEALTH_PORT_TRIES:-15}"
+  for ((i = 1; i <= tries; i++)); do
+    n="$(ss -ltn "sport = :$port" 2>/dev/null | wc -l)" || true
+    if ((n > 1)); then
+      _health_record "$label (port $port)" 0 ""
+      return 0
+    fi
+    ((i < tries)) && sleep 1
+  done
+  _health_record "$label (port $port)" 1 "$hint"
 }
 
 # _health_mysql_auth_setup — lazily build a zabbix-user defaults file (§10:

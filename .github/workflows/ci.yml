@@ -300,6 +300,8 @@ jobs:
             cat /tmp/install.out
             echo "=== log tail (always shown) ==="
             tail -n 120 /var/log/zbx.log || true
+            echo "=== zabbix_proxy.log (always shown) ==="
+            tail -n 60 /var/log/zabbix/zabbix_proxy.log 2>/dev/null || true
             test "$rc" -eq 0
             echo "=== verifying installed packages ==="
             ${{ matrix.pkg_check }}
@@ -316,8 +318,11 @@ jobs:
               test -f /root/zbx-install-credentials.txt
               pw="$(sed -n "s/^Database password: //p" /root/zbx-install-credentials.txt)"
               test -n "$pw"
-              rows="$(mysql -u zabbix -p"$pw" zabbix_proxy -sNe "SELECT COUNT(*) FROM users")"
-              test "$rows" -gt 0
+              # The proxy schema ships a users table but leaves it empty (a
+              # proxy has no login users), so assert on dbversion instead — it
+              # carries exactly one row (the schema version) in every Zabbix DB.
+              rows="$(mysql -u zabbix -p"$pw" zabbix_proxy -sNe "SELECT COUNT(*) FROM dbversion")"
+              test "$rows" -ge 1
               echo "=== verifying the generated password never reached the log ==="
               ! grep -qF "$pw" /var/log/zbx.log
               ! grep -qF "$pw" /tmp/install.out

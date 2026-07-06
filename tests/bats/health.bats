@@ -12,8 +12,12 @@ DBP="${BATS_TEST_DIRNAME}/../../src/lib/db_pgsql.sh"
 SERVICES="${BATS_TEST_DIRNAME}/../../src/lib/services.sh"
 HEALTH="${BATS_TEST_DIRNAME}/../../src/lib/health.sh"
 
+# _health_check_port polls up to ZBX_HEALTH_PORT_TRIES times with a real
+# `sleep 1` between attempts (§13 / sqlite3-proxy first-start port race).
+# Default it to 1 here so the port-down tests take a single snapshot instead
+# of sleeping ~15s each; the dedicated polling test overrides it.
 hprobe() {
-  run bash -c 'source "'"$CORE"'"; source "'"$UI"'"; source "'"$RECOMMEND"'"; source "'"$CONFIG"'"; source "'"$DBM"'"; source "'"$DBP"'"; source "'"$SERVICES"'"; source "'"$HEALTH"'"; '"$1"
+  run bash -c 'source "'"$CORE"'"; source "'"$UI"'"; source "'"$RECOMMEND"'"; source "'"$CONFIG"'"; source "'"$DBM"'"; source "'"$DBP"'"; source "'"$SERVICES"'"; source "'"$HEALTH"'"; : "${ZBX_HEALTH_PORT_TRIES:=1}"; '"$1"
 }
 
 fake_tool() {
@@ -104,6 +108,20 @@ fake_tool() {
   fake_tool "$d" ss 'printf "header\n"'
   hprobe 'PATH="'"$d"':$PATH" _health_check_port 10051 zabbix-server "some hint"; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
   [[ "$output" == *"|1|some hint"* ]]
+}
+
+@test "_health_check_port polls: a listener appearing on a later attempt still passes (sqlite3 proxy first-start race)" {
+  local d="$BATS_TEST_TMPDIR/t5b" c="$BATS_TEST_TMPDIR/t5b.count"
+  printf '0' >"$c"
+  # ss reports header-only the first time, then a real listener — proving the
+  # check retries rather than failing on the initial snapshot (a freshly
+  # started proxy is systemctl-active before it binds 10051).
+  fake_tool "$d" ss 'n="$(cat "'"$c"'")"; n=$((n + 1)); printf "%s" "$n" >"'"$c"'";
+    if [ "$n" -ge 2 ]; then printf "header\nLISTEN 0 128\n"; else printf "header\n"; fi'
+  hprobe 'PATH="'"$d"':$PATH"; ZBX_HEALTH_PORT_TRIES=3;
+    _health_check_port 10051 zabbix-proxy "some hint"; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == "zabbix-proxy (port 10051)|0|" ]]
 }
 
 @test "_health_check_db_reachable (mysql) connects as the zabbix user via a defaults file, never argv" {

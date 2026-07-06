@@ -63,6 +63,7 @@ zx() {
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" DETECT_SKIP_NET=1 \
     ZBX_ETC_DIR="$ETCDIR" STATE_FILE="${STATEFILE:-$BATS_TEST_TMPDIR/state}" \
+    ZBX_HEALTH_PORT_TRIES=1 \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -78,6 +79,7 @@ zxn() {
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" \
     ZBX_ETC_DIR="$ETCDIR" STATE_FILE="${STATEFILE:-$BATS_TEST_TMPDIR/state}" \
+    ZBX_HEALTH_PORT_TRIES=1 \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
