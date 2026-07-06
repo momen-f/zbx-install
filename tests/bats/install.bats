@@ -9,7 +9,11 @@ setup() {
   TOOLDIR="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$TOOLDIR"
   local t src
-  for t in mktemp chmod rm cp mkdir sha256sum dirname basename cat tar; do
+  # GNU tar (Linux) shells out to an external gzip for -z (unlike macOS's
+  # built-in-zlib bsdtar) — must be on PATH or both the fake tarball-creation
+  # step and install.sh's own real extraction fail with "gzip: command not
+  # found" (hit for real in CI, not reproducible on a Mac dev machine).
+  for t in mktemp chmod rm cp mkdir sha256sum dirname basename cat tar gzip; do
     src="$(command -v "$t" 2>/dev/null || true)"
     [[ -n "$src" ]] && ln -sf "$src" "$TOOLDIR/$t"
   done
