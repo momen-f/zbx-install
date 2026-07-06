@@ -20,13 +20,15 @@ setup() {
     if [[ -n "$src" ]]; then ln -sf "$src" "$TOOLDIR/$t"; fi
   done
   # config.sh's real-run tests need config.sh's hard-required paths
-  # (zabbix_server.conf, web/, the agent conf) to exist somewhere writable —
-  # ZBX_ETC_DIR (config.sh) redirects them here instead of the real /etc/zabbix.
+  # (zabbix_server.conf, web/, the agent conf, the proxy conf §15.9 stretch)
+  # to exist somewhere writable — ZBX_ETC_DIR (config.sh) redirects them here
+  # instead of the real /etc/zabbix.
   ETCDIR="$BATS_TEST_TMPDIR/etc-zabbix"
   mkdir -p "$ETCDIR/web"
   : >"$ETCDIR/zabbix_server.conf"
   : >"$ETCDIR/zabbix_agent2.conf"
   : >"$ETCDIR/zabbix_agentd.conf"
+  : >"$ETCDIR/zabbix_proxy.conf"
 }
 
 # _pkgmgr_fake_for OSR — the package manager a real host with this fixture
@@ -513,6 +515,31 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   [ "$status" -eq 2 ]
   zx os-release.ubuntu2404 meminfo.4gb --detect-only --agent-only
   [ "$status" -eq 2 ]
+  zx os-release.ubuntu2404 meminfo.4gb --proxy-only --agent-only
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Modes are mutually exclusive"* ]]
+}
+
+@test "--db rejects a value that is not mysql/pgsql/sqlite3" {
+  zx os-release.ubuntu2404 meminfo.4gb --db bogus
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--db must be mysql, pgsql, or sqlite3"* ]]
+}
+
+# Proxy exclusivity (§15.9): proxy is its own mode, never mixed into a
+# server/frontend plan — a mixed --components list collides destructively.
+@test "--components rejects proxy mixed with other components" {
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes --dry-run --components server,proxy
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--components must be"* ]]
+}
+
+# sqlite3 is a proxy-only backend (§7, §15.9): a server plan with --db sqlite3
+# would hard-fail deep in DB provisioning, so it is rejected up front.
+@test "--db sqlite3 for a (default) server plan is rejected as proxy-only" {
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes --dry-run --db sqlite3
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only valid for a proxy install"* ]]
 }
 
 # --yes always implies UNATTENDED=1 (§14), so creds_collect always
@@ -643,6 +670,91 @@ EOF
   zx os-release.ubuntu2404 meminfo.4gb --uninstall --yes
   [ "$status" -eq 0 ]
   [[ "$output" == *"No Zabbix packages found — nothing to remove."* ]]
+}
+
+# --- proxy (§15.9 stretch) ---------------------------------------------------------
+
+@test "proxy-only dry-run (sqlite3): mode dispatch, packages, proxy hostname row, registration warning" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --proxy-only --yes --db sqlite3 --proxy-hostname branch-1
+  [ "$status" -eq 0 ]
+  row "Mode:" "proxy-only"
+  row "Components:" "proxy"
+  row "Proxy hostname:" "branch-1"
+  row "Packages:" "zabbix-proxy-sqlite3"
+  [[ "$output" == *"sqlite3 (embedded, created automatically)"* ]]
+  [[ "$output" == *"registered as a matching Proxy object"* ]]
+  row "Credentials:" "not needed (no database in this plan); summary file: /root/zbx-install-credentials.txt"
+  [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
+}
+
+@test "proxy-only dry-run (mysql): db step appears in the pipeline preview targeting zabbix_proxy" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --proxy-only --yes --db mysql
+  [ "$status" -eq 0 ]
+  row "Mode:" "proxy-only"
+  [[ "$output" == *"mariadb (new install)"* ]]
+  [[ "$output" == *"zabbix-proxy-mysql zabbix-sql-scripts mariadb-server"* ]]
+  step 3 db "provision mariadb, create zabbix_proxy DB/user, import schema"
+  row "Credentials:" "auto-generated; summary file: /root/zbx-install-credentials.txt"
+}
+
+@test "--config MODE=proxy-only wires PROXY_HOSTNAME/DB_ENGINE/ZBX_SERVER_IP from the file" {
+  cat >"$BATS_TEST_TMPDIR/proxy.conf" <<'EOF'
+MODE=proxy-only
+DB_ENGINE=sqlite3
+ZBX_SERVER_IP=10.0.0.9
+PROXY_HOSTNAME=branch-office-1
+EOF
+  chmod 600 "$BATS_TEST_TMPDIR/proxy.conf"
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --config "$BATS_TEST_TMPDIR/proxy.conf"
+  [ "$status" -eq 0 ]
+  row "Mode:" "proxy-only"
+  row "Server IP:" "10.0.0.9"
+  row "Proxy hostname:" "branch-office-1"
+  row "Packages:" "zabbix-proxy-sqlite3"
+}
+
+@test "real run: --proxy-only (sqlite3) installs and passes health checks, no DB unit involved" {
+  fake curl 'exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget.log"; exit 0'
+  fake mkdir 'exit 0'
+  fake chown 'exit 0'
+  fake systemctl 'case "$1" in
+    is-active) case "$*" in *zabbix-proxy*) echo active; exit 0 ;; esac; exit 3 ;;
+    *) exit 0 ;;
+  esac'
+  fake_ss_ports
+  zx os-release.ubuntu2404 meminfo.4gb --proxy-only --yes --db sqlite3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"All checks passed"* ]]
+  run grep '^install -y' "$BATS_TEST_TMPDIR/aptget.log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"zabbix-proxy-sqlite3"* ]]
+  [[ "$output" != *"mariadb-server"* ]]
+}
+
+@test "real run: --proxy-only (mysql) provisions zabbix_proxy and passes health checks" {
+  fake curl 'exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get "$(mysql_appears_on_install)"'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/aptget.log"; exit 0'
+  fake mkdir 'exit 0'
+  fake chown 'exit 0'
+  fake systemctl 'case "$1" in
+    list-unit-files) echo "mariadb.service enabled"; exit 0 ;;
+    is-active) case "$*" in *mariadb*|*zabbix-proxy*) echo active; exit 0 ;; esac; exit 3 ;;
+    *) exit 0 ;;
+  esac'
+  fake_ss_ports
+  zx os-release.ubuntu2404 meminfo.4gb --proxy-only --yes --db mysql --generate-passwords
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"All checks passed"* ]]
+  run grep '^install -y' "$BATS_TEST_TMPDIR/aptget.log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"zabbix-proxy-mysql"* ]]
+  [[ "$output" == *"zabbix-sql-scripts"* ]]
+  [[ "$output" == *"mariadb-server"* ]]
 }
 
 @test "resume: unattended run picks up after a prior partial failure without needing --resume" {

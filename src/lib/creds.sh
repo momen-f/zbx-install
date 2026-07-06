@@ -6,7 +6,8 @@
 #             PLAN_CREDS_FILE, OPT_ADMIN_PASS (main.sh/configfile.sh — opts
 #             into changing the frontend Admin password, §15 gotcha 8).
 #   outputs : ZBX_DB_PASSWORD (the new zabbix DB user's password — resolved
-#             pre-confirm, matching §1's flow order) and, only if an existing
+#             pre-confirm, matching §1's flow order, for a full server or a
+#             mysql-backed proxy, §15.9 stretch) and, only if an existing
 #             DB engine turns out to need one, ZBX_DB_ADMIN_PASSWORD (resolved
 #             reactively, mid-pipeline, the first time db_mysql.sh's socket
 #             auth attempt fails — see creds_reenter_admin_password). Also
@@ -23,9 +24,11 @@ ZBX_ADMIN_PASSWORD=""
 
 # creds_collect — resolve the zabbix DB user's password. Called pre-confirm
 # (prepare_plan) so the plan can be shown and confirmed before anything runs;
-# a no-op when no DB will be provisioned by this plan.
+# a no-op when no DB will be provisioned by this plan — a mysql-backed proxy
+# needs one too (§15.9 stretch), a sqlite3-backed proxy self-initializes with
+# no user/password at all.
 creds_collect() {
-  if ! plan_has server; then
+  if ! (plan_has server || (plan_has proxy && [[ "$PLAN_DB_ENGINE" != "sqlite3" ]])); then
     return 0
   fi
   # configfile.sh's DB_PASS already set (and registered) this — an explicit
@@ -114,7 +117,7 @@ creds_write_summary() {
       printf '# password vault, then delete this file — it is not needed for the\n'
       printf '# installer or Zabbix to keep working.\n\n'
       printf 'Database engine:   %s\n' "$PLAN_DB_ENGINE"
-      printf 'Database name:     zabbix\n'
+      printf 'Database name:     %s\n' "$(plan_db_name)"
       printf 'Database user:     zabbix\n'
       printf 'Database password: %s\n' "$ZBX_DB_PASSWORD"
       printf 'Database host:     localhost\n'

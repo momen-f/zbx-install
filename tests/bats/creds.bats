@@ -122,6 +122,32 @@ cprobe() {
   [[ "$output" != *"Frontend Admin password"* ]]
 }
 
+# --- proxy (§15.9 stretch) ---------------------------------------------------------
+
+@test "creds_collect generates a password for a mysql-backed proxy plan" {
+  cprobe 'PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=mariadb; UNATTENDED=1; creds_collect; printf "%s" "${#ZBX_DB_PASSWORD}"'
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 12 ]
+}
+
+@test "creds_collect is a no-op for a sqlite3-backed proxy plan" {
+  cprobe 'PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3; UNATTENDED=1; creds_collect; printf "[%s]" "$ZBX_DB_PASSWORD"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "creds_write_summary uses zabbix_proxy as the database name for a proxy plan" {
+  local f="$BATS_TEST_TMPDIR/creds-proxy.txt"
+  cprobe 'core_color_init; core_log_init; DRY_RUN=0; PLAN_COMPONENTS=proxy;
+    PLAN_CREDS_FILE="'"$f"'"; PLAN_DB_ENGINE=mariadb;
+    ZBX_DB_PASSWORD="s3cr3t-proxy-pass";
+    creds_write_summary'
+  [ "$status" -eq 0 ]
+  run cat "$f"
+  [[ "$output" == *"Database name:     zabbix_proxy"* ]]
+  [[ "$output" == *"Database password: s3cr3t-proxy-pass"* ]]
+}
+
 @test "creds_write_summary includes the Admin password line once the change is confirmed done" {
   local f="$BATS_TEST_TMPDIR/creds-admin-confirmed.txt"
   local s="$BATS_TEST_TMPDIR/state-confirmed"

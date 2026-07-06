@@ -6,12 +6,14 @@
 # each function reads.
 
 CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
+UI="${BATS_TEST_DIRNAME}/../../src/lib/ui.sh"
 DETECT="${BATS_TEST_DIRNAME}/../../src/lib/detect.sh"
 REC="${BATS_TEST_DIRNAME}/../../src/lib/recommend.sh"
 
-# rprobe SNIPPET — run SNIPPET with all three libs sourced.
+# rprobe SNIPPET — run SNIPPET with core/ui/detect/recommend sourced (ui.sh
+# for ui_row/_plan_warn, needed by plan_report).
 rprobe() {
-  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'"; source "'"$REC"'"; '"$1"
+  run bash -c 'source "'"$CORE"'"; source "'"$UI"'"; source "'"$DETECT"'"; source "'"$REC"'"; '"$1"
 }
 
 # --- rule 1+labels -------------------------------------------------------------
@@ -269,4 +271,88 @@ rprobe() {
     DETECT_PORT_CONFLICTS=unknown; plan_port_warnings'
   [ "$status" -eq 0 ]
   [ "$output" = "" ]
+}
+
+# --- proxy (§15.9 stretch) ---------------------------------------------------------
+
+@test "_valid_components accepts proxy on its own but rejects it mixed with other components (§15.9 exclusivity)" {
+  rprobe '_valid_components proxy &&
+    ! _valid_components server,proxy &&
+    ! _valid_components proxy,agent &&
+    ! _valid_components server,frontend,agent,proxy &&
+    echo ok'
+  [ "$output" = "ok" ]
+}
+
+@test "plan_db_name: zabbix for server, zabbix_proxy for proxy" {
+  rprobe 'PLAN_COMPONENTS=server,frontend,agent; plan_db_name; printf " "; PLAN_COMPONENTS=proxy; plan_db_name'
+  [ "$output" = "zabbix zabbix_proxy" ]
+}
+
+@test "resolve_plan: --db sqlite3 is accepted verbatim" {
+  rprobe 'REC_ZBX_VERSION=7.0 REC_DB_ENGINE=mariadb REC_WEB_SERVER=apache REC_COMPONENTS=agent REC_SIZING=small REC_TZ="";
+    OPT_DB=sqlite3; resolve_plan; printf "%s" "$PLAN_DB_ENGINE"'
+  [ "$output" = "sqlite3" ]
+}
+
+@test "resolve_plan: PLAN_PROXY_HOSTNAME defaults to the real hostname" {
+  rprobe 'REC_ZBX_VERSION=7.0 REC_DB_ENGINE=mariadb REC_WEB_SERVER=apache REC_COMPONENTS=proxy REC_SIZING=small REC_TZ="";
+    resolve_plan; printf "%s" "$PLAN_PROXY_HOSTNAME"'
+  [ "$output" = "$(hostname 2>/dev/null)" ]
+}
+
+@test "resolve_plan: --proxy-hostname override wins over the detected hostname" {
+  rprobe 'REC_ZBX_VERSION=7.0 REC_DB_ENGINE=mariadb REC_WEB_SERVER=apache REC_COMPONENTS=proxy REC_SIZING=small REC_TZ="";
+    OPT_PROXY_HOSTNAME=my-branch-proxy; resolve_plan; printf "%s" "$PLAN_PROXY_HOSTNAME"'
+  [ "$output" = "my-branch-proxy" ]
+}
+
+@test "resolve_plan: PLAN_PROXY_HOSTNAME falls back to a literal default when hostname resolves empty" {
+  rprobe 'REC_ZBX_VERSION=7.0 REC_DB_ENGINE=mariadb REC_WEB_SERVER=apache REC_COMPONENTS=proxy REC_SIZING=small REC_TZ="";
+    hostname() { printf ""; };
+    resolve_plan; printf "%s" "$PLAN_PROXY_HOSTNAME"'
+  [ "$output" = "zabbix-proxy" ]
+}
+
+@test "plan_packages: sqlite3-backed proxy needs only the sqlite3 package" {
+  rprobe 'DETECT_FAMILY=debian DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=none DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=proxy PLAN_DB_ENGINE=sqlite3;
+    plan_packages; printf "%s" "$PLAN_PACKAGES"'
+  [ "$output" = "zabbix-proxy-sqlite3" ]
+}
+
+@test "plan_packages: mysql-backed proxy needs the mysql proxy package + zabbix-sql-scripts + the DB engine" {
+  rprobe 'DETECT_FAMILY=debian DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=none DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=proxy PLAN_DB_ENGINE=mariadb;
+    plan_packages; printf "%s" "$PLAN_PACKAGES"'
+  [ "$output" = "zabbix-proxy-mysql zabbix-sql-scripts mariadb-server" ]
+}
+
+@test "plan_packages: mysql-backed proxy does not reinstall an already-present DB engine" {
+  rprobe 'DETECT_FAMILY=debian DETECT_DB_PRESENT=mariadb,mysql DETECT_WEB_PRESENT=none DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=proxy PLAN_DB_ENGINE=mariadb;
+    plan_packages; printf "%s" "$PLAN_PACKAGES"'
+  [ "$output" = "zabbix-proxy-mysql zabbix-sql-scripts" ]
+}
+
+@test "plan_report shows the sqlite3 note, proxy hostname row, and registration warning" {
+  rprobe 'USE_COLOR=0; core_color_init; DETECT_FIREWALL=none; DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3; PLAN_PROXY_HOSTNAME=branch-1;
+    PLAN_ZBX_VERSION=7.0; PLAN_ZBX_SERVER_IP=10.0.0.5; PLAN_PACKAGES="zabbix-proxy-sqlite3";
+    PLAN_CREDS_FILE=/root/zbx-install-credentials.txt; DETECT_OS_ID=ubuntu; DETECT_OS_VERSION=24.04;
+    plan_report proxy-only'
+  [[ "$output" == *"DB engine:"*"sqlite3 (embedded, created automatically)"* ]]
+  [[ "$output" == *"Proxy hostname:"*"branch-1"* ]]
+  [[ "$output" == *"registered as a matching Proxy object"* ]]
+  [[ "$output" == *"Credentials:"*"not needed"* ]]
+}
+
+@test "plan_report: a mysql-backed proxy plan needs credentials, unlike sqlite3" {
+  rprobe 'USE_COLOR=0; core_color_init; DETECT_FIREWALL=none; DETECT_SELINUX=absent;
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=mariadb; PLAN_PROXY_HOSTNAME=branch-2;
+    PLAN_ZBX_VERSION=7.0; PLAN_ZBX_SERVER_IP=10.0.0.5; PLAN_PACKAGES="zabbix-proxy-mysql zabbix-sql-scripts mariadb-server";
+    PLAN_CREDS_FILE=/root/zbx-install-credentials.txt; UNATTENDED=1; DETECT_OS_ID=ubuntu; DETECT_OS_VERSION=24.04;
+    plan_report proxy-only'
+  [[ "$output" == *"DB engine:"*"mariadb (new install)"* ]]
+  [[ "$output" == *"Credentials:"*"auto-generated"* ]]
 }

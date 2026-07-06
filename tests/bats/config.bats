@@ -224,6 +224,72 @@ fake_tool() {
   [[ "$output" != *"Hostname=Zabbix server"* ]]
 }
 
+# --- config_render_proxy (§15.9 stretch) --------------------------------------------
+
+@test "config_render_proxy (sqlite3): sets Hostname/Server/absolute DBName, creates the zabbix home dir" {
+  local d="$BATS_TEST_TMPDIR/etc7" td="$BATS_TEST_TMPDIR/etc7-tools"
+  mkdir -p "$d"
+  : >"$d/zabbix_proxy.conf"
+  fake_tool "$td" mkdir 'echo "MKDIR $*" >>"'"$BATS_TEST_TMPDIR"'/etc7-calls.log"; exit 0'
+  fake_tool "$td" chown 'echo "CHOWN $*" >>"'"$BATS_TEST_TMPDIR"'/etc7-calls.log"; exit 0'
+  rm -f "$BATS_TEST_TMPDIR/etc7-calls.log"
+  cfprobe 'core_color_init; core_log_init; DRY_RUN=0; ZBX_ETC_DIR="'"$d"'";
+    PATH="'"$td"':$PATH"; PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3;
+    PLAN_PROXY_HOSTNAME=branch-1; PLAN_ZBX_SERVER_IP=10.0.0.5;
+    config_render_proxy'
+  [ "$status" -eq 0 ]
+  run cat "$d/zabbix_proxy.conf"
+  [[ "$output" == *"Hostname=branch-1"* ]]
+  [[ "$output" == *"Server=10.0.0.5"* ]]
+  [[ "$output" == *"DBName=/var/lib/zabbix/zabbix_proxy.db"* ]]
+  run cat "$BATS_TEST_TMPDIR/etc7-calls.log"
+  [[ "$output" == *"MKDIR -p /var/lib/zabbix"* ]]
+  [[ "$output" == *"CHOWN zabbix:zabbix /var/lib/zabbix"* ]]
+}
+
+@test "config_render_proxy (mysql): sets DBName/DBUser/DBPassword using plan_db_name" {
+  local d="$BATS_TEST_TMPDIR/etc8"
+  mkdir -p "$d"
+  : >"$d/zabbix_proxy.conf"
+  cfprobe 'core_color_init; core_log_init; DRY_RUN=0; ZBX_ETC_DIR="'"$d"'";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=mariadb;
+    PLAN_PROXY_HOSTNAME=branch-2; PLAN_ZBX_SERVER_IP=10.0.0.9;
+    ZBX_DB_PASSWORD="s3cr3t-proxy-pw";
+    config_render_proxy'
+  [ "$status" -eq 0 ]
+  run cat "$d/zabbix_proxy.conf"
+  [[ "$output" == *"Hostname=branch-2"* ]]
+  [[ "$output" == *"Server=10.0.0.9"* ]]
+  [[ "$output" == *"DBName=zabbix_proxy"* ]]
+  [[ "$output" == *"DBUser=zabbix"* ]]
+  [[ "$output" == *"DBPassword=s3cr3t-proxy-pw"* ]]
+  [[ "$output" != *"/var/lib/zabbix"* ]]
+}
+
+@test "config_render_proxy fails cleanly when the target file does not exist" {
+  cfprobe 'core_color_init; core_log_init; DRY_RUN=0; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/does-not-exist";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3; PLAN_PROXY_HOSTNAME=h; PLAN_ZBX_SERVER_IP=127.0.0.1;
+    config_render_proxy'
+  [ "$status" -eq 1 ]
+}
+
+@test "config_apply renders zabbix_proxy.conf for a proxy plan" {
+  local d="$BATS_TEST_TMPDIR/etc9" td="$BATS_TEST_TMPDIR/etc9-tools"
+  mkdir -p "$d"
+  : >"$d/zabbix_proxy.conf"
+  fake_tool "$td" mkdir 'exit 0'
+  fake_tool "$td" chown 'exit 0'
+  cfprobe 'core_color_init; core_log_init; DRY_RUN=0; ZBX_ETC_DIR="'"$d"'";
+    PATH="'"$td"':$PATH";
+    STATE_FILE="'"$BATS_TEST_TMPDIR"'/state-proxy-apply";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3; PLAN_PROXY_HOSTNAME=h; PLAN_ZBX_SERVER_IP=127.0.0.1;
+    config_apply; echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done"* ]]
+  run cat "$d/zabbix_proxy.conf"
+  [[ "$output" == *"Hostname=h"* ]]
+}
+
 # --- config_apply orchestration ------------------------------------------------------
 
 @test "config_apply skips entirely when the state file already marks it done" {

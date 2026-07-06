@@ -11,7 +11,7 @@
 1. User runs `curl -fsSL https://raw.githubusercontent.com/<org>/zbx-install/main/install.sh | bash` (or downloads a release and runs it).
 2. Bootstrap fetches the full installer, verifies its checksum, and re-executes it attached to the terminal.
 3. Installer checks root, scans the environment, and builds a **recommended stack** (Zabbix version, DB engine, web server, components, sizing preset).
-4. User picks a mode: **express** (accept recommendation), **custom** (pick everything manually, including a per-package checklist), or **agent-only**. A fourth mode, **unattended**, is triggered by `--config FILE --yes` and skips all prompts.
+4. User picks a mode: **express** (accept recommendation), **custom** (pick everything manually, including a per-package checklist), **agent-only**, or **proxy-only** (a lightweight Zabbix proxy instead of a full server — §15.9). A further mode, **unattended**, is triggered by `--config FILE --yes` and skips all prompts.
 5. Optional: update all system packages first.
 6. Installer collects the credentials it will need (hidden input, confirmation, or auto-generate).
 7. Prints a plan summary; nothing executes before explicit confirmation.
@@ -23,9 +23,9 @@
 
 ## 2. Goals and non-goals
 
-**Goals (v1):** single-node Zabbix server+frontend+agent installs, agent-only installs, express/custom/unattended modes, resumable/idempotent runs, dry-run, uninstall, container-tested across the support matrix, single-file distributable.
+**Goals (v1):** single-node Zabbix server+frontend+agent installs, agent-only installs, proxy-only installs (SQLite3 or MySQL/MariaDB backend, §15.9), express/custom/unattended modes, resumable/idempotent runs, dry-run, uninstall, container-tested across the support matrix, single-file distributable.
 
-**Non-goals (v1):** HA clusters, upgrading existing Zabbix installs between major versions, TLS certificate automation (print guidance only), Windows agents, Docker/K8s deployment targets, remote multi-host orchestration. Proxy install is a stretch goal in Phase 7, not core.
+**Non-goals (v1):** HA clusters, upgrading existing Zabbix installs between major versions, TLS certificate automation (print guidance only), Windows agents, Docker/K8s deployment targets, remote multi-host orchestration. A **PostgreSQL-backed proxy** is out of scope (proxy supports SQLite3 or MySQL/MariaDB only), and the installer never auto-registers a proxy on the server — no upstream API exists for that; it prints the manual registration step instead (§15.9).
 
 ---
 
@@ -57,7 +57,7 @@ Match on `ID` first, fall back to `ID_LIKE`. Architecture: `x86_64` fully suppor
 
 **Zabbix versions offered:** `7.0` LTS (**default recommendation**) and `7.4` (current stable; 7.4.11 as of June 2026). Keep `SUPPORTED_ZBX_VERSIONS=("7.0" "7.4")` in exactly one place in `detect.sh` so adding `8.0` LTS when it ships is a one-line change. Do not offer 6.0.
 
-**DB engines:** MariaDB (default), MySQL 8.x, PostgreSQL 15/16 with optional TimescaleDB. Embed a per-Zabbix-version minimum-version map (`REQ_MYSQL`, `REQ_MARIADB`, `REQ_PGSQL`) and validate the detected/installed engine against it; populate the map from https://www.zabbix.com/documentation/7.0/en/manual/installation/requirements and the 7.4 equivalent (*verify at build time*).
+**DB engines:** MariaDB (default), MySQL 8.x, PostgreSQL 15/16 with optional TimescaleDB. Embed a per-Zabbix-version minimum-version map (`REQ_MYSQL`, `REQ_MARIADB`, `REQ_PGSQL`) and validate the detected/installed engine against it; populate the map from https://www.zabbix.com/documentation/7.0/en/manual/installation/requirements and the 7.4 equivalent (*verify at build time*). **SQLite3** is offered only as a Zabbix **proxy** backend (embedded, self-initializing) — never a server/frontend option (§15.9).
 
 **Web server:** Apache (default), Nginx + php-fpm.
 **Agent:** `zabbix-agent2` (default), classic `zabbix-agent` selectable.
@@ -122,6 +122,7 @@ zbx-install.sh [MODE] [OPTIONS]
 Modes (mutually exclusive; default: interactive menu)
   --express               accept the recommended stack, minimal prompts
   --agent-only            install and configure only the agent
+  --proxy-only            install and configure only a Zabbix proxy (§15.9)
   --config FILE           unattended: read answers from FILE (see Appendix A)
   --detect-only           print the environment report and exit
   --uninstall             remove Zabbix (asks about data/config retention)
@@ -130,9 +131,12 @@ Options
   --yes                   assume yes on confirmations (required for headless)
   --dry-run               print every command instead of executing
   --zabbix-version X.Y    override suggested Zabbix version
-  --db mysql|pgsql        override DB engine (mysql covers MariaDB)
+  --db mysql|pgsql|sqlite3  override DB engine (mysql covers MariaDB;
+                          sqlite3 is proxy-only)
   --web apache|nginx      override web server
   --components LIST       comma list: server,frontend,agent (agent2 implied)
+  --proxy-hostname NAME   proxy's Hostname (--proxy-only); must match the
+                          Proxy object registered on the server (§15.9)
   --update / --no-update  force/skip the system-update step
   --generate-passwords    auto-generate all secrets without prompting
   --admin-pass            also change the frontend Admin password (§15.8)
@@ -143,7 +147,7 @@ Options
   -h|--help, -V|--version
 ```
 
-**Exit codes:** `0` success · `1` unexpected error · `2` usage / no TTY without unattended flags · `3` unsupported OS or arch · `4` no network to repo.zabbix.com · `5` not root and no sudo · `6` user aborted at confirmation · `7` install step failed · `8` health checks failed after retry.
+**Exit codes** (authoritative table in Appendix B; `core_exit_code_for` in `core.sh` is the implementation): `0` success · `1` unexpected error · `2` usage error / no TTY without unattended flags · `3` unsupported OS or arch · `4` no network to repo.zabbix.com · `5` repo, package, config, firewall or service step failed · `6` health checks failed after retry · `7` user aborted (or a declined/failed optional post-install step, e.g. `--admin-pass`) · `8` database provisioning failed.
 
 ---
 
@@ -181,11 +185,13 @@ Deterministic rules, applied to detection output — no magic:
 
 Express mode = this output verbatim. Custom mode = this output as pre-selected defaults in every picker.
 
+**Proxy-only mode** (like agent-only) bypasses most of the above: components are fixed to `proxy`, no web server or frontend is involved, and the only extra inputs are the real server's IP and the proxy's `Hostname` (§15.9). Its DB backend defaults to the recommended MySQL/MariaDB engine (rule 2); pick the embedded, zero-provisioning path with `--db sqlite3` / `DB_ENGINE=sqlite3`.
+
 ---
 
 ## 10. Credentials handling — strict rules
 
-Secrets involved: DB admin password (only when an existing MySQL root password is required), `zabbix` DB user password, and (Phase 7 option) a new frontend Admin password.
+Secrets involved: DB admin password (only when an existing MySQL root password is required), `zabbix` DB user password (also for a MySQL-backed proxy — §15.9; a SQLite3-backed proxy has no DB credentials at all), and an optional new frontend Admin password (§15 gotcha 8).
 
 - Collect with `ask_secret` (uses `read -rs`, double entry, minimum 12 chars, must not contain the username). Offer `g` at the prompt to auto-generate: `openssl rand -base64 24 | tr -d '/+=' | cut -c1-20`, fallback `tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20`.
 - **Never** pass secrets as command arguments (`mysql -p"$PASS"` is forbidden — visible in `ps`) and never `export` them.
@@ -240,7 +246,8 @@ Component → package name mapping (identical names across families, only the me
 | agent | `zabbix-agent2` (default) or `zabbix-agent`; agent2 plugins offered in custom mode: `zabbix-agent2-plugin-postgresql`, `-mongodb`, `-mssql` |
 | tools (custom mode optional) | `zabbix-get zabbix-sender` |
 | SELinux (RHEL only, auto) | `zabbix-selinux-policy` |
-| proxy (Phase 7 stretch) | `zabbix-proxy-mysql` or `zabbix-proxy-sqlite3` |
+| proxy, MySQL-backed (§15.9) | `zabbix-proxy-mysql zabbix-sql-scripts` |
+| proxy, SQLite3-backed (§15.9) | `zabbix-proxy-sqlite3` (self-initializing — no `zabbix-sql-scripts`) |
 
 Plus the DB engine itself when not already installed (`mariadb-server` / `mysql-server` / `postgresql` + `postgresql-server` on RHEL) and the web server if missing. Install in **one** package-manager transaction per group; on failure print the manager's own error verbatim and open the error menu: retry · view log · exit 5.
 
@@ -258,6 +265,8 @@ PostgreSQL:
 3. Import: `zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | sudo -u zabbix psql zabbix` (add a pg_hba local md5/scram line for the zabbix role first if peer auth for it fails, then reload).
 4. TimescaleDB (optional toggle, custom mode only): only proceed if a repo-available timescaledb version matches the installed PG major; run `timescaledb.sql` after schema; print the license note (TSL vs Apache features) and Zabbix docs link. If versions don't line up, print a warning and continue without it.
 
+Proxy (§15.9): reuses `db_mysql.sh` but against database **`zabbix_proxy`** (not `zabbix`), and its schema comes from `/usr/share/zabbix-sql-scripts/mysql/proxy.sql`, which ships **plain-text** — import with a stdin redirect (`… zabbix_proxy < proxy.sql`), not `zcat`. It still contains stored functions, so the `log_bin_trust_function_creators` toggle and the `SELECT COUNT(*) FROM users` resume guard both apply unchanged. A **SQLite3-backed proxy provisions nothing here** — the `zabbix-proxy` daemon creates and populates its embedded DB file on first start; there is no server unit, user, password, or schema import step.
+
 ### 12.4 Config rendering (`config.sh`)
 
 One idempotent helper: `set_conf FILE KEY VALUE` — replaces an existing `^KEY=` or `^# KEY=` line, appends if absent (sed, no duplicate lines on re-run). Apply:
@@ -267,6 +276,7 @@ One idempotent helper: `set_conf FILE KEY VALUE` — replaces an existing `^KEY=
 - nginx only: uncomment `listen` / `server_name` in `/etc/zabbix/nginx.conf`.
 - **Frontend wizard skip:** render `/etc/zabbix/web/zabbix.conf.php` directly from a heredoc template (DB type/host/name/user/password, `$ZBX_SERVER_NAME`), `chown` to the web user (`apache`/`www-data`/`wwwrun`), `chmod 600`. First browser visit then lands on the login page, not setup.
 - Agent: `Server=` / `ServerActive=` = server IP (local install → `127.0.0.1`), `Hostname` = `$(hostname -f)`.
+- Proxy (§15.9): `/etc/zabbix/zabbix_proxy.conf` — `Hostname` = the plan's proxy hostname (must match the server-side Proxy object), `Server` = the real server's IP. MySQL-backed: `DBName=zabbix_proxy`, `DBUser=zabbix`, `DBPassword`. SQLite3-backed: override `DBName` with the **absolute** path `/var/lib/zabbix/zabbix_proxy.db` (the packaged bare `DBName=zabbix_proxy` would resolve to the filesystem root — the unit has no `WorkingDirectory`), and `mkdir -p /var/lib/zabbix` + `chown zabbix:zabbix` it first (the package's preinstall scriptlet declares that home but does not create it). Enforce `root:zabbix 0640` like the server conf.
 
 ### 12.5 Firewall + SELinux (`firewall.sh`)
 
@@ -282,7 +292,7 @@ SELinux enforcing (RHEL): ensure `zabbix-selinux-policy` installed, `setsebool -
 
 ### 12.6 Service start (`services.sh`)
 
-`systemctl enable --now` in order: DB → `zabbix-server` → web (`httpd`/`apache2`/`nginx` + `php-fpm` where used) → `zabbix-agent2`. After each, poll `systemctl is-active` up to 15 s; on failure dump `journalctl -u UNIT -n 30 --no-pager` into the log and continue to health checks (which will fail loudly with context).
+`systemctl enable --now` in order: DB → `zabbix-server` → web (`httpd`/`apache2`/`nginx` + `php-fpm` where used) → `zabbix-agent2`. After each, poll `systemctl is-active` up to 15 s; on failure dump `journalctl -u UNIT -n 30 --no-pager` into the log and continue to health checks (which will fail loudly with context). A **proxy** install (§15.9) starts DB (MySQL-backed only) → `zabbix-proxy`; the unit is always `zabbix-proxy` regardless of backend, and a SQLite3-backed proxy has no DB unit to start.
 
 ---
 
@@ -299,6 +309,8 @@ SELinux enforcing (RHEL): ensure `zabbix-selinux-policy` installed, `setsebool -
 | 7 | schema present | `SELECT COUNT(*) FROM users` ≥ 1 | re-run import (state file marks it) |
 | 8 | frontend HTTP | `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1/zabbix/` (accept 200/302) | web conf, SELinux booleans, php-fpm |
 | 9 | agent answers | `zabbix_get -s 127.0.0.1 -k agent.ping` = 1 (if zabbix-get installed) | agent `Server=` line |
+
+**Proxy mode** (§15.9) runs a trimmed set: `zabbix-proxy` service active, port `10051` listening, and — MySQL-backed only — DB reachable. There are no server/frontend/agent checks and no schema-present check. Its summary prints the proxy `Hostname` plus an unmissable reminder that a matching **Proxy object must already be registered on the real server** (*Administration → Proxies*) before the proxy will connect — no upstream API auto-registers it.
 
 All pass → green summary block: frontend URL(s) built from detected IPs, **default login `Admin` / `zabbix` + bold "change it now" warning** (or, if `--admin-pass`/`ADMIN_PASS` was given, confirmation that it was already changed — see §15.8), config file paths, log paths, DB name/user, creds-file path if written, and an uninstall one-liner. Any fail → red block listing failed checks with hints and the log path, then the error menu: re-run checks · view logs · continue to summary anyway (marked degraded) · exit 6. Unattended: exit 6.
 
@@ -338,7 +350,7 @@ Skeleton requirements:
 - `trap on_err ERR` printing `${BASH_SOURCE[1]}:${BASH_LINENO[0]}: command failed` plus the last log lines, then routing to `err_menu` (interactive) or `die` (unattended).
 - `trap on_exit EXIT` — delete temp defaults-files, restore `log_bin_trust_function_creators` if we set it, remove partial downloads.
 - State file `/var/lib/zbx-install/state` (`KEY=done` lines per pipeline step). On start, if state exists and is incomplete → offer resume (skip done steps) or fresh. `--resume` flag skips the question.
-- `--uninstall`: remove zabbix packages + repo file only; ask separately whether to drop the `zabbix` DB/user and whether to delete `/etc/zabbix`. **Never** remove the DB engine or web server. Print what was kept.
+- `--uninstall`: remove zabbix packages + repo file only; ask separately whether to drop the `zabbix` (and `zabbix_proxy`, §15.9) DB/user and whether to delete `/etc/zabbix`. **Never** remove the DB engine or web server. Print what was kept.
 
 ---
 
@@ -352,10 +364,11 @@ Skeleton requirements:
 6. Ubuntu ufw is installed but inactive by default → treat "inactive" as "none" but mention it in the plan.
 7. MariaDB unit name varies (`mariadb`/`mysqld`/`mysql`) → detect, don't hardcode (§12.3).
 8. Frontend default login is `Admin`/`zabbix` → always warn; opt-in `--admin-pass` (or `ADMIN_PASS` in a `--config` file) changes it via the API (`user.login` then `user.update` with `current_passwd` set to the known default) after health checks confirm the frontend is reachable. Auth token goes in an `Authorization: Bearer` header, never the deprecated `auth` body param (current API, 7.0/7.4). `passwd` (not `password`) is the API's field name for the new value. Gated on **both** `frontend` and `server` being in this plan's components, not frontend alone — the known Admin/zabbix default only applies to a schema this install itself just imported, not to a frontend pointed at a remote/pre-existing database.
-9. TimescaleDB ↔ PostgreSQL major-version matching (§12.3.4).
+9. **Proxy install** (`--proxy-only` / `MODE=proxy-only`): a host is **either** a full server **or** a lightweight proxy — the `proxy` component is mutually exclusive with `server`/`frontend`, and the daemon unit is always `zabbix-proxy` regardless of backend. Two backends, both real: **MySQL/MariaDB** (packages `zabbix-proxy-mysql zabbix-sql-scripts`, DB `zabbix_proxy`, schema `/usr/share/zabbix-sql-scripts/mysql/proxy.sql` — **plain text**, import via stdin redirect not `zcat`; still needs the `log_bin_trust_function_creators` toggle) and **SQLite3** (`zabbix-proxy-sqlite3`, no `zabbix-sql-scripts`, no provisioning — the daemon self-initializes its embedded DB on first start). Two SQLite3 packaging gotchas: the shipped `DBName=zabbix_proxy` is a **bare relative filename** that would resolve to the filesystem root (the unit has no `WorkingDirectory`), so override it with the absolute `/var/lib/zabbix/zabbix_proxy.db`; and the package's preinstall scriptlet declares the `zabbix` user's home `/var/lib/zabbix` but does **not** create it, so `mkdir -p` + `chown zabbix:zabbix` before writing the DB. Firewall/SELinux need nothing extra — proxy shares port `10051`, the `zabbix_t` domain, and the `zabbix_can_network` boolean with the server. **Mandatory manual step:** an active proxy only connects once a matching **Proxy object** (its Name = the proxy's `Hostname`) exists on the real server (*Administration → Proxies*); there is no auto-registration API, so the installer prints this prominently in the plan and the summary. PostgreSQL-backed proxy is out of scope (§2).
 10. arm64: Zabbix repos cover most but not all family/version combos → if `DETECT_ARCH=aarch64` and the repo probe (§12.1) fails, say so explicitly in the error menu ("no repo for this arch/OS combo": agent-only fallback if the agent repo resolves · exit 3).
 11. Frontend setup wizard is skipped only if `zabbix.conf.php` is valid and readable by the web user — get ownership/mode right (§12.4).
 12. Containers without systemd: `systemctl` calls fail → detection warns at §8; document that full-stack install requires systemd (CI uses a systemd-enabled image for E2E).
+13. TimescaleDB ↔ PostgreSQL major-version matching (§12.3.4).
 
 ---
 
@@ -387,15 +400,17 @@ Strict mode everywhere; `readonly` for constants; `local` in every function; no 
 | 4 | `creds.sh` + both DB modules | Schema imported; secrets never in ps/logs (grep the log in the test) |
 | 5 | `config.sh`, `firewall.sh`, `services.sh` | Frontend reachable without setup wizard on E2E |
 | 6 | `health.sh` + summary | All 9 checks green on E2E; failure path renders the error menu with hints |
-| 7 | Unattended (`--config`), `--agent-only`, `--uninstall`, resume, `--admin-pass` (stretch: proxy) | Config-file install with zero prompts; uninstall leaves DB engine |
+| 7 | Unattended (`--config`), `--agent-only`, `--uninstall`, resume, `--admin-pass` | Config-file install with zero prompts; uninstall leaves DB engine |
 | 8 | Bootstrap polish, README (curl one-liner front and center), release workflow, tag `v0.1.0` | Fresh VM: one-liner → working Zabbix |
+
+**Post-1.0 features** (built on the same pipeline, gated on `make lint fmt test`): the frontend Admin-password change (`--admin-pass`, §15 gotcha 8) and **proxy-only install** (`--proxy-only`, SQLite3 and MySQL/MariaDB backends, §15.9) — both promoted from Phase-7 stretch goals to full, tested features.
 
 ---
 
 
 ## Appendix A — config file keys (`--config`)
 
-`MODE` (express|custom|agent-only) · `ZBX_VERSION` (7.0|7.4) · `COMPONENTS` (comma list: server,frontend,agent) · `DB_ENGINE` (mariadb|mysql|pgsql) · `DB_PASS` · `DB_ADMIN_PASS` (only for pre-existing MySQL root) · `WEB_SERVER` (apache|nginx) · `PHP_TZ` · `UPDATE_SYSTEM` (yes|no) · `OPEN_FIREWALL` (yes|no) · `GENERATE_PASSWORDS` (yes|no — autogen anything unset) · `CREDS_FILE` (path|none) · `AGENT_TYPE` (agent2|agent) · `ZBX_SERVER_IP` (agent-only mode) · `TIMESCALEDB` (yes|no) · `ASSUME_YES` (yes|no) · `ADMIN_PASS` (a literal password, or `generate` to auto-generate — opts into §15 gotcha 8, frontend-only)
+`MODE` (express|custom|agent-only|proxy-only) · `ZBX_VERSION` (7.0|7.4) · `COMPONENTS` (comma list: server,frontend,agent) · `DB_ENGINE` (mariadb|mysql|pgsql|sqlite3 — `sqlite3` is proxy-only, §15.9) · `DB_PASS` · `DB_ADMIN_PASS` (only for pre-existing MySQL root) · `WEB_SERVER` (apache|nginx) · `PHP_TZ` · `UPDATE_SYSTEM` (yes|no) · `OPEN_FIREWALL` (yes|no) · `GENERATE_PASSWORDS` (yes|no — autogen anything unset) · `CREDS_FILE` (path|none) · `AGENT_TYPE` (agent2|agent) · `ZBX_SERVER_IP` (agent-only or proxy-only mode) · `PROXY_HOSTNAME` (proxy-only mode; must match the server-side Proxy object, §15.9) · `TIMESCALEDB` (yes|no) · `ASSUME_YES` (yes|no) · `ADMIN_PASS` (a literal password, or `generate` to auto-generate — opts into §15 gotcha 8, frontend-only)
 
 Parser rules: `KEY=VALUE` lines, `#` comments, unknown keys → hard error (catches typos), file must be `0600` or a warning is printed. Secrets in the file are honored but the summary reminds the user to delete it.
 
@@ -419,7 +434,8 @@ flowchart TD
   G -->|express| H[accept recommendation]
   G -->|custom| I[pickers: version/db/web/components/packages]
   G -->|agent-only| J[agent params]
-  H & I & J --> K{update system packages?}
+  G -->|proxy-only| J2[proxy params: server IP + hostname]
+  H & I & J & J2 --> K{update system packages?}
   K -->|yes| K2[apt/dnf/zypper upgrade] --> L
   K -->|no| L[collect credentials]
   L --> M[plan summary] --> N{proceed?}

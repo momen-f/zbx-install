@@ -19,6 +19,7 @@ firewall, starts services, and runs 9 post-install health checks.
 ## What it installs
 
 - Zabbix server + frontend + agent, or agent-only for monitored hosts
+- A standalone Zabbix proxy (`--proxy-only`), SQLite3 or MySQL/MariaDB backed
 - MariaDB (default), MySQL, or PostgreSQL (+ optional TimescaleDB), schema
   imported automatically
 - Apache or Nginx, pre-configured to skip the setup wizard
@@ -32,9 +33,10 @@ firewall, starts services, and runs 9 post-install health checks.
 
 | Mode | What it does |
 |---|---|
-| *(none)* | interactive menu: express / custom / agent-only |
+| *(none)* | interactive menu: express / custom / agent-only / proxy-only |
 | `--express` | accept the recommended stack, minimal prompts |
 | `--agent-only` | install and configure only the agent |
+| `--proxy-only` | install a standalone Zabbix proxy (`--db sqlite3` or mysql) |
 | `--config FILE` | fully unattended, answers read from `FILE` |
 | `--detect-only` | print the environment report and exit |
 | `--uninstall` | remove Zabbix (asks about data/config retention) |

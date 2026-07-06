@@ -227,3 +227,104 @@ jobs:
             echo "login with the old default password: $oldlogin"
             case "$oldlogin" in *'"error"'*) : ;; *) echo "old default password still works — password was not actually changed"; exit 1 ;; esac
           '
+
+  # Proxy acceptance (SPEC §15.9): a REAL --proxy-only install must succeed for
+  # BOTH DB backends on both a Debian- and an RHEL-family target. Same real
+  # repo.zabbix.com network path and same systemd-in-Docker requirement as
+  # real-install (a proxy enable --now needs systemd; a mysql-backed proxy
+  # also needs its DB unit). The two backends exercise genuinely different
+  # code: sqlite3 self-initializes an embedded DB file with no provisioning
+  # (verified below by the file existing) while mysql provisions a real
+  # zabbix_proxy DB and imports the plain-text proxy.sql (verified by querying
+  # a real table). Both must finish with the proxy service up, port 10051
+  # listening, and the "register a Proxy object on the server" reminder in the
+  # summary — there is no full server here, so the proxy never connects, but
+  # the daemon still starts and binds its trapper port.
+  proxy-install:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
+            setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
+            db: "sqlite3"
+            pkg_check: "dpkg -l zabbix-proxy-sqlite3"
+          - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
+            setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
+            db: "mysql"
+            pkg_check: "dpkg -l zabbix-proxy-mysql zabbix-sql-scripts"
+          - image: "geerlingguy/docker-rockylinux9-ansible:latest"
+            # EPEL disabled for the same documented zabbix-web clash reason as
+            # the real-install job (harmless here, kept for parity).
+            setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true"
+            db: "sqlite3"
+            pkg_check: "rpm -q zabbix-proxy-sqlite3"
+          - image: "geerlingguy/docker-rockylinux9-ansible:latest"
+            setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true"
+            db: "mysql"
+            pkg_check: "rpm -q zabbix-proxy-mysql zabbix-sql-scripts"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the bundle
+        run: ./build.sh
+
+      - name: Real --proxy-only install (${{ matrix.db }}-backed), then verify, in ${{ matrix.image }}
+        run: |
+          set -e
+          cid="$(docker run -d --privileged --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD:/w" "${{ matrix.image }}")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+          echo "=== waiting for systemd to finish booting ==="
+          for _ in $(seq 1 30); do
+            state="$(docker exec "$cid" systemctl is-system-running 2>/dev/null || true)"
+            case "$state" in running | degraded) break ;; esac
+            sleep 1
+          done
+          echo "systemd state: $state"
+
+          docker exec -w /w "$cid" bash -c '
+            set -e
+            ${{ matrix.setup }}
+            set +e
+            bash dist/zbx-install.sh --proxy-only --yes --db ${{ matrix.db }} \
+              --proxy-hostname ci-proxy --generate-passwords --no-color \
+              --log-file /var/log/zbx.log >/tmp/install.out 2>&1
+            rc=$?
+            set -e
+            echo "=== installer stdout (always shown) ==="
+            cat /tmp/install.out
+            echo "=== log tail (always shown) ==="
+            tail -n 120 /var/log/zbx.log || true
+            test "$rc" -eq 0
+            echo "=== verifying installed packages ==="
+            ${{ matrix.pkg_check }}
+            echo "=== verifying the proxy service is active and port 10051 is listening ==="
+            systemctl is-active --quiet zabbix-proxy
+            ss -ltnH "sport = :10051" | grep -q .
+            if [ "${{ matrix.db }}" = "sqlite3" ]; then
+              echo "=== verifying the embedded sqlite3 DB self-initialized ==="
+              test -s /var/lib/zabbix/zabbix_proxy.db
+              # sqlite3-backed proxy provisions no DB user/password, so no
+              # credentials summary is written (§15.9).
+            else
+              echo "=== verifying the zabbix_proxy schema was actually imported ==="
+              test -f /root/zbx-install-credentials.txt
+              pw="$(sed -n "s/^Database password: //p" /root/zbx-install-credentials.txt)"
+              test -n "$pw"
+              rows="$(mysql -u zabbix -p"$pw" zabbix_proxy -sNe "SELECT COUNT(*) FROM users")"
+              test "$rows" -gt 0
+              echo "=== verifying the generated password never reached the log ==="
+              ! grep -qF "$pw" /var/log/zbx.log
+              ! grep -qF "$pw" /tmp/install.out
+            fi
+            echo "=== verifying the health summary printed the proxy registration reminder ==="
+            grep -q "All checks passed" /tmp/install.out
+            grep -q "Proxy hostname:" /tmp/install.out
+            grep -q "ci-proxy" /tmp/install.out
+            grep -q "must be registered as a matching Proxy object" /tmp/install.out
+          '

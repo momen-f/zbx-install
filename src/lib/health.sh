@@ -16,7 +16,8 @@
 #             exit 6.
 #
 # Checks are skipped (not failed) when this plan has no matching component
-# (agent-only has no server/frontend checks) or, for check 9, when
+# (agent-only has no server/frontend checks; a sqlite3-backed proxy, §15.9
+# stretch, has no separate DB server to reach) or, for check 9, when
 # zabbix_get simply isn't installed (§13: "if zabbix-get installed").
 
 # Each check appends "NAME|0-or-1|HINT" (HINT empty on pass).
@@ -33,6 +34,14 @@ _health_check_server_service() {
     _health_record "zabbix-server service" 0 ""
   else
     _health_record "zabbix-server service" 1 "journalctl -u zabbix-server -n 50"
+  fi
+}
+
+_health_check_proxy_service() {
+  if systemctl is-active --quiet zabbix-proxy 2>/dev/null; then
+    _health_record "zabbix-proxy service" 0 ""
+  else
+    _health_record "zabbix-proxy service" 1 "journalctl -u zabbix-proxy -n 50"
   fi
 }
 
@@ -96,14 +105,15 @@ _health_mysql_auth_setup() {
 }
 
 _health_check_db_reachable() {
-  local ok=1
+  local ok=1 dbname
+  dbname="$(plan_db_name)"
   if [[ "$PLAN_DB_ENGINE" == "pgsql" ]]; then
     # Peer auth as the "zabbix" OS user — same connection path db_pgsql.sh
     # itself used to import the schema (§12.3), not the admin path.
-    sudo -u zabbix psql zabbix -tAc 'SELECT 1' >/dev/null 2>&1 && ok=0
+    sudo -u zabbix psql "$dbname" -tAc 'SELECT 1' >/dev/null 2>&1 && ok=0
   else
     _health_mysql_auth_setup
-    printf 'SELECT 1;\n' | "${_HEALTH_MYSQL_ARGS[@]}" zabbix >/dev/null 2>&1 && ok=0
+    printf 'SELECT 1;\n' | "${_HEALTH_MYSQL_ARGS[@]}" "$dbname" >/dev/null 2>&1 && ok=0
   fi
   if ((ok == 0)); then
     _health_record "DB reachable as zabbix" 0 ""
@@ -196,6 +206,14 @@ health_run_checks() {
     _health_check_db_reachable
     _health_check_schema_present
   fi
+  if plan_has proxy; then
+    _health_check_proxy_service
+    _health_check_port 10051 "zabbix-proxy" "check the proxy log /var/log/zabbix/zabbix_proxy.log"
+    # sqlite3 self-initializes with no separate DB server to reach; no
+    # schema-present check either (§15.9 stretch — kept lean, same
+    # minimal-check precedent as agent-only).
+    [[ "$PLAN_DB_ENGINE" != "sqlite3" ]] && _health_check_db_reachable
+  fi
   if plan_has frontend; then
     _health_check_web_service
     _health_check_frontend_http
@@ -231,6 +249,11 @@ health_print_summary() {
     printf '\n%s%sAll checks passed — Zabbix is up.%s\n' "$C_GREEN" "$C_BOLD" "$C_RESET"
   fi
 
+  if plan_has proxy; then
+    printf '\n  Proxy hostname:  %s\n' "$PLAN_PROXY_HOSTNAME"
+    printf '  %s⚠ must be registered as a matching Proxy object on the real Zabbix server (Administration > Proxies) — see §15.9%s\n' "$C_YELLOW" "$C_RESET"
+  fi
+
   if plan_has frontend; then
     local ip
     ip="$(_health_detect_ip)"
@@ -249,17 +272,25 @@ health_print_summary() {
 
   printf '\n  Config files:\n'
   plan_has server && printf '    %s\n' "$ZBX_ETC_DIR/zabbix_server.conf"
+  plan_has proxy && printf '    %s\n' "$ZBX_ETC_DIR/zabbix_proxy.conf"
   plan_has frontend && printf '    %s\n' "$ZBX_ETC_DIR/web/zabbix.conf.php"
   plan_has agent && printf '    %s\n' "$(_config_agent_conf_path)"
 
   printf '\n  Logs:\n'
   [[ -n "$LOG_FILE" ]] && printf '    %s (installer)\n' "$LOG_FILE"
   plan_has server && printf '    /var/log/zabbix/zabbix_server.log\n'
+  plan_has proxy && printf '    /var/log/zabbix/zabbix_proxy.log\n'
   plan_has agent && printf '    /var/log/zabbix/zabbix_agent2.log\n'
 
-  if plan_has server; then
-    printf '\n  Database:        zabbix (user zabbix, engine %s)\n' "$PLAN_DB_ENGINE"
-    if [[ "$PLAN_CREDS_FILE" != "none" && -n "$PLAN_CREDS_FILE" && -f "$PLAN_CREDS_FILE" ]]; then
+  if plan_has server || plan_has proxy; then
+    local dbdesc
+    if plan_has proxy && [[ "$PLAN_DB_ENGINE" == "sqlite3" ]]; then
+      dbdesc="embedded sqlite3 (/var/lib/zabbix/zabbix_proxy.db)"
+    else
+      dbdesc="$(plan_db_name) (user zabbix, engine $PLAN_DB_ENGINE)"
+    fi
+    printf '\n  Database:        %s\n' "$dbdesc"
+    if [[ "$PLAN_DB_ENGINE" != "sqlite3" && "$PLAN_CREDS_FILE" != "none" && -n "$PLAN_CREDS_FILE" && -f "$PLAN_CREDS_FILE" ]]; then
       printf '  Credentials:     %s (delete after moving it to a vault)\n' "$PLAN_CREDS_FILE"
     fi
   fi

@@ -109,7 +109,16 @@ _valid_zbx_version() {
   return 1
 }
 
-# _valid_components LIST — comma list of server|frontend|agent, non-empty.
+# _valid_components LIST — comma list of server|frontend|agent|proxy, non-empty.
+# proxy is not offered in the interactive custom-mode component picker (it's
+# a separate --proxy-only mode, mirroring agent-only) — accepted here only so
+# --config/--components can still express a proxy plan explicitly, but ONLY on
+# its own: proxy is mutually exclusive with server/frontend (§15.9 — a host is
+# either a full server or a lightweight proxy, never both). A mixed list like
+# "server,proxy" is rejected, because the two collide destructively: both
+# daemons bind :10051, and plan_db_name/_db_mysql_schema_file resolve proxy
+# first, so the server's DB step would provision into the proxy's database and
+# schema while zabbix_server.conf still points at DBName=zabbix.
 _valid_components() {
   local -a toks=()
   local c
@@ -117,10 +126,12 @@ _valid_components() {
   if ((${#toks[@]} == 0)); then return 1; fi
   for c in "${toks[@]}"; do
     case "$c" in
-      server | frontend | agent) ;;
+      server | frontend | agent | proxy) ;;
       *) return 1 ;;
     esac
   done
+  # proxy only ever stands alone (§15.9).
+  if [[ ",$1," == *",proxy,"* && "$1" != "proxy" ]]; then return 1; fi
   return 0
 }
 
@@ -153,6 +164,7 @@ resolve_plan() {
   case "${OPT_DB:-}" in
     pgsql) PLAN_DB_ENGINE="pgsql" ;;
     mariadb) PLAN_DB_ENGINE="mariadb" ;; # config-file DB_ENGINE=mariadb: force it explicitly
+    sqlite3) PLAN_DB_ENGINE="sqlite3" ;; # proxy-only stretch (§15.9): meaningless for server, not cross-validated
     mysql)
       # --db mysql covers MariaDB (§7): keep an existing MySQL-family engine,
       # otherwise fall to the MariaDB default.
@@ -181,10 +193,30 @@ resolve_plan() {
   PLAN_UPDATE="${OPT_UPDATE:-}" # empty = ask once in the flow (§11)
   PLAN_ZBX_SERVER_IP="${OPT_SERVER_IP:-127.0.0.1}"
   PLAN_CREDS_FILE="${OPT_CREDS_FILE:-/root/zbx-install-credentials.txt}"
+  # proxy-only stretch (§15.9): must match the Proxy object's Name on the
+  # real server exactly, so a real, unique hostname is a far more useful
+  # default than the literal "Zabbix proxy" placeholder the packaged config
+  # template ships with.
+  PLAN_PROXY_HOSTNAME="${OPT_PROXY_HOSTNAME:-$(hostname 2>/dev/null || true)}"
+  [[ -n "$PLAN_PROXY_HOSTNAME" ]] || PLAN_PROXY_HOSTNAME="zabbix-proxy"
 }
 
 # plan_has COMPONENT — is it in the comma list?
 plan_has() { [[ ",$PLAN_COMPONENTS," == *",$1,"* ]]; }
+
+# plan_db_name — the mysql/pgsql database name this plan's DB step creates.
+# server and proxy are mutually exclusive components (never both in the same
+# plan — a host is either a full server or a lightweight proxy, never
+# both), so a single helper covering both is unambiguous. Not meaningful for
+# a sqlite3-backed proxy (a file path, not a database name — see
+# config_render_proxy, config.sh).
+plan_db_name() {
+  if plan_has proxy; then
+    printf 'zabbix_proxy'
+  else
+    printf 'zabbix'
+  fi
+}
 
 # --- package computation (§12.2) ------------------------------------------------
 plan_packages() {
@@ -220,6 +252,17 @@ plan_packages() {
       pkgs+=("zabbix-apache-conf${suffix}")
     fi
   fi
+  if plan_has proxy; then
+    # sqlite3 (§15.9 stretch): no zabbix-sql-scripts companion needed — the
+    # embedded DB is created automatically on first start, verified against
+    # the real Zabbix docs and package dependency metadata, unlike mysql's
+    # proxy.sql which still needs a manual import (db_mysql.sh).
+    if [[ "$PLAN_DB_ENGINE" == "sqlite3" ]]; then
+      pkgs+=(zabbix-proxy-sqlite3)
+    else
+      pkgs+=(zabbix-proxy-mysql zabbix-sql-scripts)
+    fi
+  fi
   if plan_has agent; then
     pkgs+=("$PLAN_AGENT_TYPE")
     local -a plugs=()
@@ -247,9 +290,13 @@ plan_packages() {
 # packages when the plan needs them and they are not already installed (§12.2).
 # Echo, not nameref: namerefs need bash 4.3, we target 4.2 (§3).
 # php-fpm companions for nginx vary per family — resolved in Phase 3 (§12.2).
+# proxy shares this gate with server (§15.9 stretch) — a mysql-backed proxy
+# needs the same DB server package a mysql-backed full server would; a
+# sqlite3-backed proxy matches none of the case arms below and correctly
+# adds nothing, no separate exclusion needed.
 _plan_db_web_packages() {
   local -a pk=()
-  if plan_has server && [[ ",$DETECT_DB_PRESENT," != *",$PLAN_DB_ENGINE,"* ]]; then
+  if (plan_has server || plan_has proxy) && [[ ",$DETECT_DB_PRESENT," != *",$PLAN_DB_ENGINE,"* ]]; then
     case "$PLAN_DB_ENGINE" in
       mariadb) pk+=(mariadb-server) ;;
       mysql) pk+=(mysql-server) ;;
@@ -285,9 +332,11 @@ plan_report() {
   ui_row "Target OS:" "$DETECT_OS_NAME"
   ui_row "Zabbix version:" "$PLAN_ZBX_VERSION ($(rec_version_label "$PLAN_ZBX_VERSION"))"
   ui_row "Components:" "$PLAN_COMPONENTS"
-  if plan_has server || plan_has frontend; then
+  if plan_has server || plan_has frontend || plan_has proxy; then
     local dbnote="new install"
-    if [[ ",$DETECT_DB_PRESENT," == *",$PLAN_DB_ENGINE,"* ]]; then
+    if [[ "$PLAN_DB_ENGINE" == "sqlite3" ]]; then
+      dbnote="embedded, created automatically"
+    elif [[ ",$DETECT_DB_PRESENT," == *",$PLAN_DB_ENGINE,"* ]]; then
       dbnote="existing"
     fi
     ui_row "DB engine:" "$PLAN_DB_ENGINE ($dbnote)"
@@ -320,12 +369,16 @@ plan_report() {
   if [[ "$DETECT_SELINUX" == "enforcing" ]]; then
     ui_row "SELinux:" "enforcing — will set httpd_can_connect_zabbix + zabbix_can_network (§12.5)"
   fi
-  if [[ "$mode" == "agent-only" ]]; then
+  if [[ "$mode" == "agent-only" || "$mode" == "proxy-only" ]]; then
     ui_row "Server IP:" "$PLAN_ZBX_SERVER_IP"
+  fi
+  if plan_has proxy; then
+    ui_row "Proxy hostname:" "$PLAN_PROXY_HOSTNAME"
+    _plan_warn "this Hostname must be registered as a matching Proxy object on the real Zabbix server (Administration > Proxies) before this proxy can connect — see §15.9"
   fi
   ui_row "Packages:" "$PLAN_PACKAGES"
   local cred="not needed (no database in this plan)"
-  if plan_has server; then
+  if plan_has server || (plan_has proxy && [[ "$PLAN_DB_ENGINE" != "sqlite3" ]]); then
     if [[ "$UNATTENDED" == "1" || "${OPT_GENPASS:-0}" == "1" ]]; then
       cred="auto-generated"
     else
@@ -417,8 +470,8 @@ plan_pipeline_preview() {
   fi
   _plan_step "repo" "add the Zabbix $PLAN_ZBX_VERSION repository for $DETECT_OS_ID $DETECT_OS_VERSION (§12.1)"
   _plan_step "packages" "install: $PLAN_PACKAGES (§12.2)"
-  if plan_has server; then
-    _plan_step "db" "provision $PLAN_DB_ENGINE, create zabbix DB/user, import schema (§12.3)"
+  if plan_has server || (plan_has proxy && [[ "$PLAN_DB_ENGINE" != "sqlite3" ]]); then
+    _plan_step "db" "provision $PLAN_DB_ENGINE, create $(plan_db_name) DB/user, import schema (§12.3)"
   fi
   _plan_step "config" "render server/agent/web configs, skip the frontend wizard (§12.4)"
   if [[ "$PLAN_OPEN_FIREWALL" == "yes" || "$DETECT_SELINUX" == "enforcing" ]]; then

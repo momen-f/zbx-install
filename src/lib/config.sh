@@ -4,9 +4,11 @@
 # Contract:
 #   inputs  : PLAN_* (recommend.sh), ZBX_DB_PASSWORD (creds.sh), DETECT_FAMILY
 #             (detect.sh).
-#   outputs : renders zabbix_server.conf, the agent conf, the frontend's
-#             zabbix.conf.php (so the setup wizard is skipped), PHP timezone,
-#             and (nginx only) listen/server_name; state_mark_done("config").
+#   outputs : renders zabbix_server.conf (or zabbix_proxy.conf, §15.9
+#             stretch — mutually exclusive with server), the agent conf, the
+#             frontend's zabbix.conf.php (so the setup wizard is skipped),
+#             PHP timezone, and (nginx only) listen/server_name;
+#             state_mark_done("config").
 #             On failure routes to err_menu('config', ...) (§14: retry / skip
 #             (warn, degraded) / view log / exit 5).
 #
@@ -156,6 +158,41 @@ config_apply_db_sizing() {
     fi
   done
   log WARN "no known MySQL/MariaDB config directory found — DB sizing not applied"
+}
+
+# --- zabbix_proxy.conf (§15.9 stretch) ------------------------------------------
+# config_render_proxy — Hostname must match a Proxy object pre-registered on
+# the real server (§15.9 — no auto-registration exists upstream, verified
+# against the real Zabbix docs). The sqlite3 package's packaged default
+# DBName is a bare relative filename with no WorkingDirectory= set on the
+# unit (verified against the real RPM and its config comments) — left alone
+# it would resolve to /zabbix_proxy (filesystem root), so an absolute path is
+# set explicitly instead, under the zabbix user's own home directory (the
+# preinstall scriptlet declares it but never actually creates it on disk).
+config_render_proxy() {
+  local file="$ZBX_ETC_DIR/zabbix_proxy.conf"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log INFO "DRY-RUN: render $file"
+    return 0
+  fi
+  if [[ ! -f "$file" ]]; then
+    log ERROR "cannot render $file — it does not exist"
+    return 1
+  fi
+  set_conf "$file" Hostname "$PLAN_PROXY_HOSTNAME" || return 1
+  set_conf "$file" Server "$PLAN_ZBX_SERVER_IP" || return 1
+  if [[ "$PLAN_DB_ENGINE" == "sqlite3" ]]; then
+    run mkdir -p /var/lib/zabbix || return 1
+    run chown zabbix:zabbix /var/lib/zabbix || return 1
+    set_conf "$file" DBName /var/lib/zabbix/zabbix_proxy.db || return 1
+  else
+    set_conf "$file" DBName "$(plan_db_name)" || return 1
+    set_conf "$file" DBUser zabbix || return 1
+    set_conf "$file" DBPassword "$ZBX_DB_PASSWORD" || return 1
+  fi
+  chown root:zabbix "$file" 2>/dev/null || log WARN "could not chown $file to root:zabbix"
+  chmod 0640 "$file"
+  log INFO "rendered $file"
 }
 
 # --- PHP timezone (§12.4) -------------------------------------------------------
@@ -313,6 +350,9 @@ config_apply() {
   if plan_has server; then
     config_render_server || return 1
     config_apply_db_sizing || return 1
+  fi
+  if plan_has proxy; then
+    config_render_proxy || return 1
   fi
   if plan_has frontend; then
     config_set_php_tz || return 1

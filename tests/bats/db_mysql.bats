@@ -80,7 +80,8 @@ fake_tool() {
   local d="$BATS_TEST_TMPDIR/t4"
   fake_tool "$d" mysql 'echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/mysql-calls.log"; cat >>"'"$BATS_TEST_TMPDIR"'/mysql-stdin.log"; exit 0'
   rm -f "$BATS_TEST_TMPDIR/mysql-calls.log" "$BATS_TEST_TMPDIR/mysql-stdin.log"
-  mprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+  mrprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=server;
     ZBX_DB_PASSWORD="s3cr3t-sql-check"; _DB_MYSQL_ARGS=(mysql -u root);
     _db_mysql_create_and_grant'
   [ "$status" -eq 0 ]
@@ -96,7 +97,8 @@ fake_tool() {
 @test "_db_mysql_import skips (resume case) when the schema already reports rows" {
   local d="$BATS_TEST_TMPDIR/t5"
   fake_tool "$d" mysql 'exit 0'
-  mprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+  mrprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=server;
     _DB_MYSQL_ARGS=(mysql -u root); _db_mysql_import; echo done'
   [ "$status" -eq 0 ]
   [[ "$output" == *"done"* ]]
@@ -225,4 +227,65 @@ fake_tool() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"done"* ]]
   [ ! -f "$BATS_TEST_TMPDIR/dnf-calls.log" ]
+}
+
+@test "db_mysql_module_enable also fires for a mysql-backed proxy plan (not just server)" {
+  local d="$BATS_TEST_TMPDIR/t14"
+  fake_tool "$d" dnf '
+    if [[ "$1 $2 $3" == "-y module list" ]]; then
+      printf "Name    Stream Profiles                   Summary\nmariadb 10.11  client, galera, server [d] MariaDB Module\nmariadb 11.8   client, galera, server     MariaDB Module\n"
+    elif [[ "$1 $2" == "module enable" ]]; then
+      echo "ENABLE:$3" >>"'"$BATS_TEST_TMPDIR"'/dnf-calls.log"
+    fi
+    exit 0
+  '
+  rm -f "$BATS_TEST_TMPDIR/dnf-calls.log"
+  mrprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    DETECT_PKGMGR=dnf; DETECT_DB_PRESENT=none; PLAN_DB_ENGINE=mariadb; PLAN_COMPONENTS=proxy;
+    db_mysql_module_enable'
+  [ "$status" -eq 0 ]
+  run cat "$BATS_TEST_TMPDIR/dnf-calls.log"
+  [[ "$output" == "ENABLE:mariadb:10.11" ]]
+}
+
+# --- proxy (§15.9 stretch): schema file selection + db name ------------------------
+
+@test "_db_mysql_schema_file: server.sql.gz for server, proxy.sql for proxy" {
+  mrprobe 'PLAN_COMPONENTS=server; _db_mysql_schema_file; printf " "; PLAN_COMPONENTS=proxy; _db_mysql_schema_file'
+  [ "$output" = "/usr/share/zabbix-sql-scripts/mysql/server.sql.gz /usr/share/zabbix-sql-scripts/mysql/proxy.sql" ]
+}
+
+@test "_db_mysql_create_and_grant targets zabbix_proxy for a proxy plan" {
+  local d="$BATS_TEST_TMPDIR/t15"
+  fake_tool "$d" mysql 'cat >>"'"$BATS_TEST_TMPDIR"'/mysql-stdin.log"; exit 0'
+  rm -f "$BATS_TEST_TMPDIR/mysql-stdin.log"
+  mrprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=proxy;
+    ZBX_DB_PASSWORD="s3cr3t-proxy-sql-check"; _DB_MYSQL_ARGS=(mysql -u root);
+    _db_mysql_create_and_grant'
+  [ "$status" -eq 0 ]
+  run cat "$BATS_TEST_TMPDIR/mysql-stdin.log"
+  [[ "$output" == *"CREATE DATABASE IF NOT EXISTS zabbix_proxy"* ]]
+  [[ "$output" == *"GRANT ALL PRIVILEGES ON zabbix_proxy.*"* ]]
+  [[ "$output" == *"CREATE USER IF NOT EXISTS 'zabbix'@'localhost'"* ]]
+}
+
+# _db_mysql_import_pipe: a plain-text (non-.gz) schema — proxy.sql — is fed
+# via stdin redirection, never zcat (proxy.sql ships uncompressed, unlike
+# server's server.sql.gz).
+@test "_db_mysql_import_pipe redirects a plain-text schema via stdin, not zcat" {
+  local d="$BATS_TEST_TMPDIR/t16" schema="$BATS_TEST_TMPDIR/proxy.sql"
+  printf -- '-- fake proxy schema --\n' >"$schema"
+  fake_tool "$d" mysql 'echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/mysql-calls.log"; cat >>"'"$BATS_TEST_TMPDIR"'/mysql-stdin.log"; exit 0'
+  fake_tool "$d" zcat 'echo "ZCAT SHOULD NOT RUN" >&2; exit 1'
+  rm -f "$BATS_TEST_TMPDIR/mysql-calls.log" "$BATS_TEST_TMPDIR/mysql-stdin.log"
+  mprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    _DB_MYSQL_ARGS=(mysql -u root);
+    _db_mysql_import_pipe "'"$schema"'" zabbix_proxy; echo "rc=$?"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rc=0"* ]]
+  run cat "$BATS_TEST_TMPDIR/mysql-calls.log"
+  [[ "$output" == *"zabbix_proxy"* ]]
+  run cat "$BATS_TEST_TMPDIR/mysql-stdin.log"
+  [[ "$output" == *"-- fake proxy schema --"* ]]
 }

@@ -114,3 +114,45 @@ fake_tool() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"done"* ]]
 }
+
+# --- proxy (§15.9 stretch) ---------------------------------------------------------
+
+@test "services_start starts the DB unit then zabbix-proxy for a mysql-backed proxy plan" {
+  local d="$BATS_TEST_TMPDIR/t7" log="$BATS_TEST_TMPDIR/t7.log"
+  fake_tool "$d" systemctl '
+    case "$1 $2" in
+      "list-unit-files mariadb.service") echo "mariadb.service enabled" ;;
+      "enable --now") echo "ENABLE:$3" >>"'"$log"'" ;;
+      "is-active") exit 0 ;;
+    esac
+    exit 0
+  '
+  rm -f "$log"
+  svprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=mariadb;
+    services_start; echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done"* ]]
+  run cat "$log"
+  [[ "$output" == *"ENABLE:mariadb"* ]]
+  [[ "$output" == *"ENABLE:zabbix-proxy"* ]]
+}
+
+@test "services_start starts only zabbix-proxy (no DB unit) for a sqlite3-backed proxy plan" {
+  local d="$BATS_TEST_TMPDIR/t8" log="$BATS_TEST_TMPDIR/t8.log"
+  fake_tool "$d" systemctl '
+    case "$1 $2" in
+      "enable --now") echo "ENABLE:$3" >>"'"$log"'" ;;
+      "is-active") exit 0 ;;
+    esac
+    exit 0
+  '
+  rm -f "$log"
+  svprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3;
+    services_start; echo done'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done"* ]]
+  run cat "$log"
+  [[ "$output" == "ENABLE:zabbix-proxy" ]]
+}

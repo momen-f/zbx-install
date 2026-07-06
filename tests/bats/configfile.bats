@@ -170,3 +170,36 @@ mkcfg() {
   [[ "$output" == *"rc=0"* ]]
   [[ "$output" == *"not 600"* ]]
 }
+
+# --- proxy (§15.9 stretch) ---------------------------------------------------------
+
+@test "cfgfile_parse: MODE=proxy-only and DB_ENGINE=sqlite3 are accepted" {
+  local f
+  f="$(mkcfg 'MODE=proxy-only' 'DB_ENGINE=sqlite3')"
+  cprobe 'cfgfile_parse "'"$f"'" && printf "%s|%s\n" "$CFGFILE_MODE" "$OPT_DB"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "proxy-only|sqlite3" ]
+}
+
+@test "cfgfile_parse: PROXY_HOSTNAME sets OPT_PROXY_HOSTNAME verbatim" {
+  local f
+  f="$(mkcfg 'MODE=proxy-only' 'PROXY_HOSTNAME=branch-office-1')"
+  cprobe 'cfgfile_parse "'"$f"'" && echo "$OPT_PROXY_HOSTNAME"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "branch-office-1" ]
+}
+
+@test "cfgfile_parse: COMPONENTS=proxy is accepted (still validated by _valid_components)" {
+  local f
+  f="$(mkcfg 'MODE=proxy-only' 'COMPONENTS=proxy')"
+  cprobe 'cfgfile_parse "'"$f"'" && echo "$OPT_COMPONENTS"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "proxy" ]
+}
+
+@test "cfgfile_parse: COMPONENTS=server,proxy is a hard error (proxy is mutually exclusive, §15.9)" {
+  local f
+  f="$(mkcfg 'MODE=custom' 'COMPONENTS=server,proxy')"
+  cprobe 'cfgfile_parse "'"$f"'" || printf "ERR:%s\n" "$CFGFILE_ERR"'
+  [[ "$output" == *"invalid value for COMPONENTS: 'server,proxy'"* ]]
+}

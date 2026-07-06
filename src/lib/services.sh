@@ -1,5 +1,7 @@
 # shellcheck shell=bash
 # services.sh — enable & start DB -> zabbix-server -> web (+php-fpm) -> agent (§12.6).
+# Also starts a mysql-backed proxy's DB unit -> zabbix-proxy (§15.9 stretch;
+# sqlite3-backed skips the DB unit — mutually exclusive with server).
 #
 # Contract:
 #   inputs  : PLAN_DB_ENGINE, PLAN_WEB_SERVER, PLAN_AGENT_TYPE (recommend.sh),
@@ -93,6 +95,16 @@ services_start() {
     esac
     _services_start_unit "$db_unit"
     _services_start_unit zabbix-server
+  fi
+  if plan_has proxy; then
+    # sqlite3-backed proxy has no DB unit to start (§15.9 stretch) — the
+    # embedded file is created by zabbix-proxy itself on first start.
+    if [[ "$PLAN_DB_ENGINE" != "sqlite3" ]]; then
+      _services_start_unit "$(_db_mysql_unit_name 2>/dev/null || printf 'mariadb')"
+    fi
+    # Unit name is always "zabbix-proxy" regardless of DB backend (verified
+    # against the real RPM/deb packages).
+    _services_start_unit zabbix-proxy
   fi
   if plan_has frontend; then
     local -a web_units=()

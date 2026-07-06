@@ -60,6 +60,7 @@ zbx-install.sh [MODE] [OPTIONS]
 Modes (mutually exclusive; default: interactive menu)
   --express               accept the recommended stack, minimal prompts
   --agent-only            install and configure only the agent
+  --proxy-only            install and configure only a Zabbix proxy
   --config FILE           unattended: read answers from FILE
   --detect-only           print the environment report and exit
   --uninstall             remove Zabbix (asks about data/config retention)
@@ -69,9 +70,12 @@ Options
   --resume                skip the resume/fresh-start question, resume
   --dry-run               print every command instead of executing
   --zabbix-version X.Y    override suggested Zabbix version
-  --db mysql|pgsql        override DB engine (mysql covers MariaDB)
+  --db mysql|pgsql|sqlite3  override DB engine (mysql covers MariaDB;
+                          sqlite3 is proxy-only)
   --web apache|nginx      override web server
   --components LIST       comma list: server,frontend,agent (agent2 implied)
+  --proxy-hostname NAME   Hostname the proxy reports to the server as
+                          (--proxy-only; must be pre-registered there)
   --update / --no-update  force/skip the system-update step
   --generate-passwords    auto-generate all secrets without prompting
   --admin-pass            also change the frontend Admin password (prompted,
@@ -91,7 +95,7 @@ FORCED_FAMILY=0
 RESUME=0
 CUR_MODE=""
 OPT_ZBX_VERSION="" OPT_DB="" OPT_WEB="" OPT_COMPONENTS=""
-OPT_UPDATE="" OPT_GENPASS=0 OPT_CREDS_FILE="" OPT_ADMIN_PASS=0
+OPT_UPDATE="" OPT_GENPASS=0 OPT_CREDS_FILE="" OPT_ADMIN_PASS=0 OPT_PROXY_HOSTNAME=""
 # Appendix A keys with no CLI-flag equivalent (SPEC §7 offers none) — only
 # configfile.sh's --config parsing ever sets these; resolve_plan (recommend.sh)
 # consults them the same way it does the flag-backed OPT_* above.
@@ -129,7 +133,7 @@ parse_args() {
         main_version
         exit 0
         ;;
-      --express | --agent-only | --detect-only | --uninstall) _set_mode "${1#--}" ;;
+      --express | --agent-only | --proxy-only | --detect-only | --uninstall) _set_mode "${1#--}" ;;
       --config)
         _need_val "$1" "${2:-}"
         _set_mode "unattended"
@@ -155,8 +159,8 @@ parse_args() {
       --db)
         _need_val "$1" "${2:-}"
         case "$2" in
-          mysql | pgsql) OPT_DB="$2" ;;
-          *) usage_err "--db must be mysql or pgsql (got '$2')" ;;
+          mysql | pgsql | sqlite3) OPT_DB="$2" ;;
+          *) usage_err "--db must be mysql, pgsql, or sqlite3 (got '$2')" ;;
         esac
         shift
         ;;
@@ -173,6 +177,11 @@ parse_args() {
         _valid_components "$2" ||
           usage_err "--components must be a comma list of server,frontend,agent (got '$2')"
         OPT_COMPONENTS="$2"
+        shift
+        ;;
+      --proxy-hostname)
+        _need_val "$1" "${2:-}"
+        OPT_PROXY_HOSTNAME="$2"
         shift
         ;;
       --update) OPT_UPDATE="yes" ;;
@@ -199,9 +208,9 @@ parse_args() {
 # --- guards (run before any recommendation) ----------------------------------
 # guard_tty — prompts are impossible without a TTY. The one sanctioned
 # self-exit in interactive mode (§6.2). §6.2 requires an explicit mode
-# (--config or --express; we also allow --agent-only, which likewise needs
-# zero prompts under --yes) together with --yes — bare --yes still falls
-# through to the interactive mode_menu, which needs a real TTY, so it must
+# (--config or --express; we also allow --agent-only/--proxy-only, which
+# likewise need zero prompts under --yes) together with --yes — bare --yes
+# still falls through to the interactive mode_menu, which needs a real TTY, so it must
 # NOT bypass this guard (a failed /dev/tty read there would otherwise default
 # silently to option 1 and install unattended without ever exiting 2).
 guard_tty() {
@@ -352,6 +361,7 @@ mode_menu() {
       "express — accept the recommendation (Zabbix ${REC_ZBX_VERSION}, ${REC_DB_ENGINE}, ${REC_WEB_SERVER})" \
       "custom — pick every component" \
       "agent-only — monitoring agent only" \
+      "proxy-only — Zabbix proxy only" \
       "exit — leave the installer"
     case "$choice" in
       express*)
@@ -364,6 +374,10 @@ mode_menu() {
         ;;
       agent-only*)
         CUR_MODE="agent-only"
+        return 0
+        ;;
+      proxy-only*)
+        CUR_MODE="proxy-only"
         return 0
         ;;
       exit*)
@@ -468,6 +482,19 @@ agent_params() {
   if [[ -n "$reply" ]]; then PLAN_ZBX_SERVER_IP="$reply"; fi
 }
 
+# proxy_params — proxy-only mode: which real server this proxy reports to,
+# and the proxy's own Hostname. That Hostname must match a Proxy object
+# already created on the real server (§15.9) — this installer has no API
+# access to a remote server to create it automatically.
+proxy_params() {
+  if [[ "$UNATTENDED" == "1" ]]; then return 0; fi
+  local reply
+  read -r -p "Zabbix server IP for the proxy [${PLAN_ZBX_SERVER_IP}]: " reply </dev/tty || reply=""
+  if [[ -n "$reply" ]]; then PLAN_ZBX_SERVER_IP="$reply"; fi
+  read -r -p "Proxy hostname, must match a Proxy object on the server [${PLAN_PROXY_HOSTNAME}]: " reply </dev/tty || reply=""
+  if [[ -n "$reply" ]]; then PLAN_PROXY_HOSTNAME="$reply"; fi
+}
+
 # resolve_update — the §11 question, asked once; flags/unattended skip it.
 resolve_update() {
   if [[ -n "$PLAN_UPDATE" ]]; then return 0; fi
@@ -502,6 +529,10 @@ prepare_plan() {
       PLAN_COMPONENTS="agent"
       agent_params
       ;;
+    proxy-only)
+      PLAN_COMPONENTS="proxy"
+      proxy_params
+      ;;
     custom)
       # MODE=custom via --config (§18 Phase 7) means "every choice comes from
       # the file's OPT_*-mapped keys, not an interactive picker" — these two
@@ -513,6 +544,13 @@ prepare_plan() {
       fi
       ;;
   esac
+  # sqlite3 is a proxy-only backend (§7, §15.9): a server/frontend plan has no
+  # sqlite3 server binary, and _plan_db_web_packages installs no engine for it,
+  # so the DB step would hard-fail deep in provisioning. Reject the combination
+  # here — cheaply, before any credential prompt — rather than dying at exit 8.
+  if [[ "$PLAN_DB_ENGINE" == "sqlite3" ]] && ! plan_has proxy; then
+    usage_err "--db sqlite3 (DB_ENGINE=sqlite3) is only valid for a proxy install (--proxy-only); a server plan needs mysql or pgsql"
+  fi
   resolve_update
   resolve_tz
   creds_collect
@@ -540,7 +578,9 @@ plan_confirm() {
 run_pipeline() {
   core_state_init
   local label="Running the implemented steps (repo, packages"
-  if plan_has server; then label+=", database"; fi
+  if plan_has server || (plan_has proxy && [[ "$PLAN_DB_ENGINE" != "sqlite3" ]]); then
+    label+=", database"
+  fi
   label+=", config, firewall, services, health"
   [[ -n "$ZBX_ADMIN_PASSWORD" ]] && label+=", admin-pass"
   label+=")"
@@ -559,6 +599,11 @@ run_pipeline() {
       pgsql) db_pgsql_provision ;;
       *) db_mysql_provision ;;
     esac
+    creds_write_summary
+  elif plan_has proxy && [[ "$PLAN_DB_ENGINE" != "sqlite3" ]]; then
+    # proxy only ever uses mysql/mariadb (§15.9 stretch) — sqlite3 self-
+    # initializes with no provisioning step at all, per Zabbix's own docs.
+    db_mysql_provision
     creds_write_summary
   fi
 
@@ -593,10 +638,14 @@ _uninstall_find_packages() {
 # _uninstall_drop_db — best-effort DROP for whichever engine is actually
 # present; detected from the client binary, not PLAN_DB_ENGINE (uninstall
 # never builds a plan). Never touches the engine service/package itself.
+# Drops both possible mysql database names (server's "zabbix" and a
+# mysql-backed proxy's "zabbix_proxy", §15.9 stretch) — IF EXISTS makes
+# dropping the one that was never created a no-op, and a host only ever has
+# one (server/proxy are mutually exclusive).
 _uninstall_drop_db() {
   if command -v mysql >/dev/null 2>&1; then
     _db_mysql_auth_setup
-    if ! printf "DROP DATABASE IF EXISTS zabbix;\nDROP USER IF EXISTS 'zabbix'@'localhost';\n" |
+    if ! printf "DROP DATABASE IF EXISTS zabbix;\nDROP DATABASE IF EXISTS zabbix_proxy;\nDROP USER IF EXISTS 'zabbix'@'localhost';\n" |
       run "${_DB_MYSQL_ARGS[@]}"; then
       log WARN "dropping the zabbix mysql database/user failed — see the log"
     fi

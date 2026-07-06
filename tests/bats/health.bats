@@ -39,6 +39,20 @@ fake_tool() {
   [[ "$output" == *"|1|journalctl -u zabbix-server -n 50"* ]]
 }
 
+@test "_health_check_proxy_service passes when systemctl reports active" {
+  local d="$BATS_TEST_TMPDIR/t3b"
+  fake_tool "$d" systemctl 'exit 0'
+  hprobe 'PATH="'"$d"':$PATH" _health_check_proxy_service; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
+  [[ "$output" == "zabbix-proxy service|0|" ]]
+}
+
+@test "_health_check_proxy_service fails with the journalctl hint when inactive" {
+  local d="$BATS_TEST_TMPDIR/t3c"
+  fake_tool "$d" systemctl 'exit 3'
+  hprobe 'PATH="'"$d"':$PATH" _health_check_proxy_service; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
+  [[ "$output" == *"|1|journalctl -u zabbix-proxy -n 50"* ]]
+}
+
 @test "_health_check_agent_service checks zabbix-agent2 by default, zabbix-agent for classic" {
   local d="$BATS_TEST_TMPDIR/t3"
   fake_tool "$d" systemctl 'case "$*" in *zabbix-agent2*) exit 0 ;; *) exit 3 ;; esac'
@@ -131,6 +145,18 @@ fake_tool() {
   fake_tool "$d" sudo 'exit 1'
   hprobe 'PATH="'"$d"':$PATH" PLAN_DB_ENGINE=pgsql; _health_check_db_reachable; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
   [[ "$output" == *"|1|check DBPassword / pg_hba.conf"* ]]
+}
+
+@test "_health_check_db_reachable (mysql) targets zabbix_proxy for a proxy plan" {
+  local d="$BATS_TEST_TMPDIR/t6b"
+  fake_tool "$d" mysql 'echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/mysql-argv.log"; exit 0'
+  rm -f "$BATS_TEST_TMPDIR/mysql-argv.log"
+  hprobe 'core_color_init; core_log_init; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=mariadb; ZBX_DB_PASSWORD="s3cr3t-proxy-health-check";
+    _health_check_db_reachable; printf "%s" "${ZBX_HEALTH_RESULTS[0]}"'
+  [[ "$output" == "DB reachable as zabbix|0|" ]]
+  run cat "$BATS_TEST_TMPDIR/mysql-argv.log"
+  [[ "$output" == *"zabbix_proxy"* ]]
 }
 
 @test "_health_check_schema_present (mysql) reads the row count back, not just the exit code" {
@@ -236,6 +262,43 @@ fake_tool() {
   [[ "$output" == *"journalctl -u zabbix-agent2"* ]]
 }
 
+# --- proxy (§15.9 stretch) ---------------------------------------------------------
+
+@test "health_run_checks: sqlite3-backed proxy only runs service+port checks (no DB reachable check)" {
+  local d="$BATS_TEST_TMPDIR/t15"
+  fake_tool "$d" systemctl 'exit 0'
+  fake_tool "$d" ss 'printf "h\nLISTEN\n"'
+  hprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3;
+    health_run_checks; printf "%d" "${#ZBX_HEALTH_RESULTS[@]}"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "2" ]
+}
+
+@test "health_run_checks: mysql-backed proxy also runs the DB reachable check" {
+  local d="$BATS_TEST_TMPDIR/t16"
+  fake_tool "$d" systemctl 'exit 0'
+  fake_tool "$d" ss 'printf "h\nLISTEN\n"'
+  fake_tool "$d" mysql 'exit 0'
+  hprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=mariadb; ZBX_DB_PASSWORD=pw;
+    health_run_checks; printf "%d" "${#ZBX_HEALTH_RESULTS[@]}"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "3" ]
+}
+
+@test "health_run_checks: a down zabbix-proxy service fails with the journalctl hint" {
+  local d="$BATS_TEST_TMPDIR/t17"
+  fake_tool "$d" systemctl 'exit 3'
+  fake_tool "$d" ss 'printf "h\n"'
+  hprobe 'core_color_init; LOG_FILE="'"$BATS_TEST_TMPDIR"'/t17.log"; core_log_init; DRY_RUN=0;
+    PATH="'"$d"':$PATH"; PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3;
+    health_run_checks'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"of 2 checks failed"* ]]
+  [[ "$output" == *"journalctl -u zabbix-proxy"* ]]
+}
+
 # --- health_print_summary -----------------------------------------------------------
 
 @test "health_print_summary does nothing under DRY_RUN" {
@@ -325,6 +388,30 @@ fake_tool() {
     health_print_summary'
   [[ "$output" != *"Frontend:"* ]]
   [[ "$output" != *"Default login"* ]]
+}
+
+@test "health_print_summary shows the proxy hostname, registration warning, and embedded sqlite3 path" {
+  hprobe 'core_color_init; DRY_RUN=0; LOG_FILE=/tmp/x.log; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/etc";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=sqlite3; PLAN_PROXY_HOSTNAME=branch-1; PLAN_CREDS_FILE=none;
+    ZBX_DEGRADED_STEPS=();
+    health_print_summary'
+  [[ "$output" == *"Proxy hostname:  branch-1"* ]]
+  [[ "$output" == *"registered as a matching Proxy object"* ]]
+  [[ "$output" == *"Database:        embedded sqlite3 (/var/lib/zabbix/zabbix_proxy.db)"* ]]
+  [[ "$output" == *"$BATS_TEST_TMPDIR/etc/zabbix_proxy.conf"* ]]
+  [[ "$output" == *"/var/log/zabbix/zabbix_proxy.log"* ]]
+  [[ "$output" != *"Frontend:"* ]]
+}
+
+@test "health_print_summary shows the mysql database name and credentials path for a mysql-backed proxy" {
+  local f="$BATS_TEST_TMPDIR/creds-proxy-summary.txt"
+  : >"$f"
+  hprobe 'core_color_init; DRY_RUN=0; LOG_FILE=/tmp/x.log; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/etc";
+    PLAN_COMPONENTS=proxy; PLAN_DB_ENGINE=mariadb; PLAN_PROXY_HOSTNAME=branch-2; PLAN_CREDS_FILE="'"$f"'";
+    ZBX_DEGRADED_STEPS=();
+    health_print_summary'
+  [[ "$output" == *"Database:        zabbix_proxy (user zabbix, engine mariadb)"* ]]
+  [[ "$output" == *"Credentials:"*"$f"* ]]
 }
 
 @test "health_print_summary shows the credentials file path only when one was actually written" {

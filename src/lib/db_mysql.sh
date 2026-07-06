@@ -1,10 +1,15 @@
 # shellcheck shell=bash
 # db_mysql.sh — MariaDB/MySQL provisioning + schema import (§12.3).
 #
+# Also backs a mysql-backed proxy (§15.9 stretch): server and proxy are
+# mutually exclusive components, so plan_db_name() (recommend.sh) picking
+# "zabbix" vs "zabbix_proxy" and _db_mysql_schema_file() picking
+# server.sql.gz vs proxy.sql is unambiguous — never both in the same plan.
+#
 # Contract:
 #   inputs  : PLAN_DB_ENGINE, DETECT_FAMILY (detect.sh), ZBX_DB_PASSWORD /
 #             ZBX_DB_ADMIN_PASSWORD (creds.sh).
-#   outputs : enables+starts the DB unit, creates the zabbix database/user,
+#   outputs : enables+starts the DB unit, creates the database/user (plan_db_name),
 #             imports the schema; state_mark_done("db"). On failure routes to
 #             err_menu('db', ...) (§14: retry / re-enter credentials / view
 #             log / exit 8 — never skip, a half-provisioned DB can't be
@@ -66,7 +71,7 @@ _db_mysql_mariadb_module_stream() {
 db_mysql_module_enable() {
   [[ "$DETECT_PKGMGR" == "dnf" ]] || return 0
   [[ "$PLAN_DB_ENGINE" == "mariadb" ]] || return 0
-  plan_has server || return 0
+  (plan_has server || plan_has proxy) || return 0
   [[ ",${DETECT_DB_PRESENT:-}," != *",$PLAN_DB_ENGINE,"* ]] || return 0
   local stream
   stream="$(_db_mysql_mariadb_module_stream)" || true
@@ -129,19 +134,34 @@ _db_mysql_probe() {
 
 # --- create + grant --------------------------------------------------------------
 # _db_mysql_create_and_grant — idempotent (IF NOT EXISTS); password goes in
-# via stdin SQL text, never argv (§10).
+# via stdin SQL text, never argv (§10). Same 'zabbix'@'localhost' username
+# for both server and proxy (matches Zabbix's own documented convention for
+# either) — only the database name (plan_db_name) differs.
 _db_mysql_create_and_grant() {
-  local sql
-  sql="CREATE DATABASE IF NOT EXISTS zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+  local dbname sql
+  dbname="$(plan_db_name)"
+  sql="CREATE DATABASE IF NOT EXISTS ${dbname} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZBX_DB_PASSWORD}';
-GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
+GRANT ALL PRIVILEGES ON ${dbname}.* TO 'zabbix'@'localhost';
 FLUSH PRIVILEGES;"
   printf '%s\n' "$sql" | run "${_DB_MYSQL_ARGS[@]}"
 }
 
 # --- schema import (§12.3 point 4) ------------------------------------------------
 _ZBX_MYSQL_TRUST_TOGGLED=0
-readonly ZBX_MYSQL_SCHEMA=/usr/share/zabbix-sql-scripts/mysql/server.sql.gz
+
+# _db_mysql_schema_file — the schema to import for this plan's component.
+# proxy's proxy.sql is plain text (imported via stdin redirection below, not
+# zcat) — unlike server's gzipped server.sql.gz. Both ship in the same
+# zabbix-sql-scripts package; verified against the real package contents
+# (§15.9 stretch).
+_db_mysql_schema_file() {
+  if plan_has proxy; then
+    printf '/usr/share/zabbix-sql-scripts/mysql/proxy.sql'
+  else
+    printf '/usr/share/zabbix-sql-scripts/mysql/server.sql.gz'
+  fi
+}
 
 # db_mysql_cleanup_trust_flag — EXIT-trap hook (core.sh calls this if
 # defined): restore log_bin_trust_function_creators on ANY exit path, not
@@ -156,36 +176,50 @@ db_mysql_cleanup_trust_flag() {
   fi
 }
 
-# _db_mysql_import_pipe SCHEMA_FILE — zcat | mysql, redacted and dry-run
-# aware. A plain single-command run() can't express a pipe, so this is a
-# small hand-rolled equivalent (see core.sh's run() for the same pattern).
+# _db_mysql_import_pipe SCHEMA_FILE DBNAME — zcat|mysql (gzipped server
+# schema) or mysql<schema (plain-text proxy schema), redacted and dry-run
+# aware. A plain single-command run() can't express a pipe/redirection, so
+# this is a small hand-rolled equivalent (see core.sh's run() for the same
+# pattern).
 _db_mysql_import_pipe() {
-  local schema_file="$1" rc
+  local schema_file="$1" dbname="$2" rc
   if [[ "$DRY_RUN" == "1" ]]; then
-    log INFO "DRY-RUN: import $schema_file into zabbix"
+    log INFO "DRY-RUN: import $schema_file into $dbname"
     return 0
   fi
-  log INFO "RUN: import $schema_file into zabbix"
-  { zcat "$schema_file" | "${_DB_MYSQL_ARGS[@]}" zabbix; } 2>&1 | core_redact >>"$LOG_FILE"
+  log INFO "RUN: import $schema_file into $dbname"
+  case "$schema_file" in
+    *.gz)
+      { zcat "$schema_file" | "${_DB_MYSQL_ARGS[@]}" "$dbname"; } 2>&1 | core_redact >>"$LOG_FILE"
+      ;;
+    *)
+      { "${_DB_MYSQL_ARGS[@]}" "$dbname" <"$schema_file"; } 2>&1 | core_redact >>"$LOG_FILE"
+      ;;
+  esac
   rc="${PIPESTATUS[0]}"
   return "$rc"
 }
 
 # _db_mysql_import — resume guard (§12.3 point 4): skip if the schema already
-# imported successfully in a prior run.
+# imported successfully in a prior run. proxy.sql has a users table too
+# (verified against the real package contents), so the same guard query
+# works unchanged for both schemas.
 _db_mysql_import() {
+  local dbname schema_file
+  dbname="$(plan_db_name)"
+  schema_file="$(_db_mysql_schema_file)"
   if [[ "$DRY_RUN" != "1" ]] &&
-    printf 'SELECT COUNT(*) FROM users;\n' | "${_DB_MYSQL_ARGS[@]}" zabbix >/dev/null 2>&1; then
-    log INFO "zabbix schema already present — skipping import"
+    printf 'SELECT COUNT(*) FROM users;\n' | "${_DB_MYSQL_ARGS[@]}" "$dbname" >/dev/null 2>&1; then
+    log INFO "$dbname schema already present — skipping import"
     return 0
   fi
-  if [[ "$DRY_RUN" != "1" && ! -f "$ZBX_MYSQL_SCHEMA" ]]; then
-    log ERROR "schema file not found: $ZBX_MYSQL_SCHEMA"
+  if [[ "$DRY_RUN" != "1" && ! -f "$schema_file" ]]; then
+    log ERROR "schema file not found: $schema_file"
     return 1
   fi
   printf 'SET GLOBAL log_bin_trust_function_creators = 1;\n' | run "${_DB_MYSQL_ARGS[@]}" || return 1
   _ZBX_MYSQL_TRUST_TOGGLED=1
-  if ! _db_mysql_import_pipe "$ZBX_MYSQL_SCHEMA"; then
+  if ! _db_mysql_import_pipe "$schema_file" "$dbname"; then
     db_mysql_cleanup_trust_flag
     return 1
   fi
