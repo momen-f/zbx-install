@@ -1,5 +1,7 @@
 # zbx-install
 
+**Latest release: [v0.1.1](https://github.com/momen-f/zbx-install/releases/tag/v0.1.1)**
+
 A single Bash script that takes a bare Linux server to a fully running,
 verified [Zabbix](https://www.zabbix.com/) stack — interactively or fully
 unattended.
