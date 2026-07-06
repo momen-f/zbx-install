@@ -1,29 +1,76 @@
 # zbx-install
 
-Bare-OS-to-running-Zabbix installer for Linux, as a single Bash script.
+A single Bash script that takes a bare Linux server to a fully running,
+verified [Zabbix](https://www.zabbix.com/) stack — interactively or fully
+unattended.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<org>/zbx-install/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/momen-f/zbx-install/main/install.sh | bash
 ```
 
-> **Status:** early development. Build proceeds phase by phase — see
-> [SPEC.md](SPEC.md) §18. Done: Phase 0 (scaffold, core, UI, build, CI),
-> Phase 1 (detection, `--detect-only`), Phase 2 (recommendation engine, modes,
-> plan summary, confirm), Phase 3 (repo setup + real package install),
-> Phase 4 (credentials + MySQL/MariaDB and PostgreSQL provisioning + schema
-> import), Phase 5 (config rendering, firewall/SELinux, service start),
-> Phase 6 (post-install health checks + summary) — `--express --yes` now
-> takes a bare OS all the way to a running, verified Zabbix stack.
-> Unattended config files (`--config`), `--uninstall`, and resume still land
-> in Phase 7.
+It detects your OS, recommends a stack (Zabbix version, database, web
+server, sizing), and prints a plan for you to confirm — nothing is installed
+before you approve it. Then it adds the Zabbix repo, installs packages,
+provisions the database and imports the schema, renders configs, opens the
+firewall, starts services, and runs 9 post-install health checks.
+
+## What it installs
+
+- Zabbix server + frontend + agent, or agent-only for monitored hosts
+- MariaDB (default), MySQL, or PostgreSQL (+ optional TimescaleDB), schema
+  imported automatically
+- Apache or Nginx, pre-configured to skip the setup wizard
+- firewalld/ufw rules and RHEL SELinux booleans, opened for you
+- A final report: frontend URL, default login, config/log paths, and an
+  uninstall one-liner
+
+## Modes
+
+| Mode | What it does |
+|---|---|
+| *(none)* | interactive menu: express / custom / agent-only |
+| `--express` | accept the recommended stack, minimal prompts |
+| `--agent-only` | install and configure only the agent |
+| `--config FILE` | fully unattended, answers read from `FILE` |
+| `--detect-only` | print the environment report and exit |
+| `--uninstall` | remove Zabbix (asks about data/config retention) |
+
+Every prompt has a flag or config-file equivalent, so any run can be made
+unattended with `--yes`. Run `zbx-install.sh --help` for the full flag list,
+or see [SPEC.md](SPEC.md) §7 (CLI) and Appendix A (`--config` file format).
+
+## Support matrix
+
+| Family | Versions | Package manager |
+|---|---|---|
+| Debian | 12, 13 | apt |
+| Ubuntu | 22.04, 24.04 | apt |
+| RHEL-like (RHEL, CentOS Stream, Rocky, AlmaLinux, Oracle Linux) | 8, 9 | dnf |
+| SUSE (SLES, openSUSE Leap) | SLES 15 SP5+, Leap 15.6 | zypper |
+
+Offers Zabbix `7.0` (LTS, default) and `7.4` (current stable). Full detail
+in [SPEC.md](SPEC.md) §4.
+
+## Other ways to run it
+
+```sh
+# Track the unreleased main branch instead of the latest release
+# (unchecksummed — for development only):
+curl -fsSL https://raw.githubusercontent.com/momen-f/zbx-install/main/install.sh | bash -s -- --dev
+
+# Download a release and run it directly, no bootstrap:
+curl -fsSLO https://github.com/momen-f/zbx-install/releases/latest/download/zbx-install.sh
+chmod +x zbx-install.sh
+./zbx-install.sh
+```
 
 ## Development
 
 ```sh
-make lint    # shellcheck src + bundled artifact
+make lint    # shellcheck src + bootstrap + bundled artifact
 make fmt     # shfmt formatting check
 make test    # bats unit tests
 make build   # bundle src/ -> dist/zbx-install.sh
 ```
 
-See [SPEC.md](SPEC.md) for the full specification, support matrix, and CLI.
+See [SPEC.md](SPEC.md) for the full specification.

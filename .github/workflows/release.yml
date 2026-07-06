@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Tag must match the VERSION file (catches a forgotten version bump)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          want="v$(cat VERSION)"
+          if [[ "$TAG" != "$want" ]]; then
+            echo "tag $TAG does not match VERSION file ($want)" >&2
+            exit 1
+          fi
+
+      - name: Build and run the full test suite before publishing
+        run: make test
+
+      - name: Generate checksums
+        run: (cd dist && sha256sum zbx-install.sh >SHA256SUMS)
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            dist/zbx-install.sh \
+            dist/SHA256SUMS \
+            install.sh \
+            --title "$TAG" \
+            --generate-notes
