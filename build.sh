@@ -32,6 +32,7 @@ ORDER=(
   lib/firewall.sh
   lib/services.sh
   lib/health.sh
+  lib/adminpass.sh
   main.sh
 )
 

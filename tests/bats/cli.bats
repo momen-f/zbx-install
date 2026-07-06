@@ -189,6 +189,25 @@ step() {
   [[ "$output" != *"provision"* ]]
 }
 
+# Regression coverage for the plan_report "Admin login:" row (recommend.sh) —
+# exercises the real resolve_plan -> creds_collect_admin_pass -> plan_report
+# path end to end (not a hand-copied condition), catching e.g. a typo in the
+# row text or the condition checking the wrong variable.
+@test "--admin-pass shows the Admin-login-will-change row in the plan summary; absent by default" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes --admin-pass
+  [ "$status" -eq 0 ]
+  row "Admin login:" "will be changed after install (§15 gotcha 8)"
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Admin login:"* ]]
+}
+
+@test "--admin-pass shows no Admin-login row for an agent-only plan (no frontend to log into)" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --agent-only --yes --admin-pass
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Admin login:"* ]]
+}
+
 # --- real (non-dry-run) repo+package execution, verified via recording fakes ---
 # These exercise the ACTUAL command construction (not just dry-run text) by
 # faking curl/dpkg/apt-get/apt-cache to record their argv and succeed, so the
@@ -320,6 +339,59 @@ EOF
   [ "$status" -eq 6 ]
   [[ "$output" == *"checks failed"* ]]
   [[ "$output" == *"journalctl -u zabbix-agent2"* ]]
+}
+
+# Acceptance test for the optional post-Phase-8 --admin-pass feature (§15.8):
+# a full unattended express install that also logs into the frontend API and
+# changes the Admin password, end to end through the real bundled artifact.
+#
+# Deliberately NOT reusing FAKE_CURL_FRONTEND_200 here: its *127.0.0.1/zabbix*
+# match is broad enough to also match .../zabbix/api_jsonrpc.php (same URL
+# prefix), which would intercept every admin-pass API call before this test's
+# own JSON-RPC handling ever ran. The three JSON-RPC calls admin_pass_update
+# makes are checked FIRST instead, the same way adminpass.bats's own fake
+# does: user.login/user.logout show up directly in argv (curl -d '...'),
+# user.update's body only ever reaches stdin (-d @-, §10: the new password is
+# a secret, never argv) — only once none of those three match does the
+# frontend HTTP check's plain http://127.0.0.1/zabbix/ get a look-in.
+@test "real run: --admin-pass changes the frontend Admin password; the new password reaches stdin only, never argv or the log" {
+  fake curl '
+    call=""
+    for a in "$@"; do
+      case "$a" in *user.login*) call=login ;; *user.logout*) call=logout ;; esac
+    done
+    if [[ -z "$call" ]]; then
+      case "$*" in *api_jsonrpc.php*) call=update ;; esac
+    fi
+    case "$call" in
+      login) printf "{\"jsonrpc\":\"2.0\",\"result\":\"tok123\"}"; exit 0 ;;
+      update) cat >>"'"$BATS_TEST_TMPDIR"'/adminapi-stdin.log"; printf "{\"jsonrpc\":\"2.0\",\"result\":{\"userids\":[\"1\"]}}"; exit 0 ;;
+      logout) printf "{\"jsonrpc\":\"2.0\",\"result\":true}"; exit 0 ;;
+    esac
+    case "$*" in *http://127.0.0.1/zabbix/*) printf 200; exit 0 ;; esac
+    echo "ARGV:$*" >>"'"$BATS_TEST_TMPDIR"'/curl-argv.log"
+    exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get "$(mysql_appears_on_install)exit 0"
+  fake_db_mysql_success
+  fake_ss_ports
+  # A deterministic, greppable "generated" password for BOTH the DB and the
+  # admin password (both go through ui_gen_password/openssl) — one marker
+  # covers checking that neither ever leaked, matching the pgsql test above.
+  fake openssl 'printf "E2EADMINMARKERZZ"'
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes --admin-pass --generate-passwords
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"All checks passed"* ]]
+  [[ "$output" == *"Admin login:"* ]]
+  [[ "$output" == *"changed"* ]]
+  run cat "$BATS_TEST_TMPDIR/adminapi-stdin.log"
+  [[ "$output" == *"E2EADMINMARKERZZ"* ]]
+  [[ "$output" == *"current_passwd"* ]]
+  run cat "$BATS_TEST_TMPDIR/curl-argv.log"
+  [[ "$output" != *"E2EADMINMARKERZZ"* ]]
+  run cat "$BATS_TEST_TMPDIR/zbx.log"
+  [[ "$output" != *"E2EADMINMARKERZZ"* ]]
 }
 
 @test "real run: --db pgsql provisions via sudo -u postgres; the generated password reaches stdin only, never argv or the log" {

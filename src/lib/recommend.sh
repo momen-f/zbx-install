@@ -333,6 +333,15 @@ plan_report() {
     fi
   fi
   ui_row "Credentials:" "$cred; summary file: $PLAN_CREDS_FILE"
+  # Matches admin_pass_update's own gate exactly (adminpass.sh): a config
+  # file can set ZBX_ADMIN_PASSWORD directly regardless of components, so
+  # checking the value alone isn't enough to predict whether this will
+  # actually run — plan_has frontend/server must agree too, or a
+  # frontend-only + ADMIN_PASS=... plan would show a promise this step
+  # will silently no-op on.
+  if [[ -n "${ZBX_ADMIN_PASSWORD:-}" ]] && plan_has frontend && plan_has server; then
+    ui_row "Admin login:" "will be changed after install (§15 gotcha 8)"
+  fi
   ui_row "Log file:" "$LOG_FILE"
   plan_report_warnings
   printf '\n  Nothing has been executed yet.\n'

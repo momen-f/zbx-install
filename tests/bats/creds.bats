@@ -29,6 +29,46 @@ cprobe() {
   [ "$output" -ge 12 ]
 }
 
+@test "creds_collect_admin_pass is a no-op when --admin-pass wasn't requested" {
+  cprobe 'PLAN_COMPONENTS=server,frontend,agent; creds_collect_admin_pass; printf "[%s]" "$ZBX_ADMIN_PASSWORD"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "creds_collect_admin_pass is a no-op for an agent-only plan even with --admin-pass" {
+  cprobe 'PLAN_COMPONENTS=agent; OPT_ADMIN_PASS=1; UNATTENDED=1; creds_collect_admin_pass; printf "[%s]" "$ZBX_ADMIN_PASSWORD"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+# Regression test: same fix as admin_pass_update's — a frontend-only plan
+# (no server) must not resolve an admin password at all, since the known
+# Admin/zabbix default this feature relies on only applies to a schema this
+# install itself provisioned.
+@test "creds_collect_admin_pass is a no-op for a frontend-only plan (no server) even with --admin-pass" {
+  cprobe 'PLAN_COMPONENTS=frontend,agent; OPT_ADMIN_PASS=1; UNATTENDED=1; creds_collect_admin_pass; printf "[%s]" "$ZBX_ADMIN_PASSWORD"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "creds_collect_admin_pass auto-generates under UNATTENDED without prompting" {
+  cprobe 'PLAN_COMPONENTS=server,frontend,agent; OPT_ADMIN_PASS=1; UNATTENDED=1; creds_collect_admin_pass; printf "%s" "${#ZBX_ADMIN_PASSWORD}"'
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 12 ]
+}
+
+@test "creds_collect_admin_pass auto-generates when --generate-passwords is set" {
+  cprobe 'PLAN_COMPONENTS=server,frontend,agent; OPT_ADMIN_PASS=1; UNATTENDED=0; OPT_GENPASS=1; creds_collect_admin_pass; printf "%s" "${#ZBX_ADMIN_PASSWORD}"'
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 12 ]
+}
+
+@test "creds_collect_admin_pass does not regenerate a value already set (e.g. by ADMIN_PASS=... in a config file)" {
+  cprobe 'PLAN_COMPONENTS=server,frontend,agent; OPT_ADMIN_PASS=1; UNATTENDED=1; ZBX_ADMIN_PASSWORD="from-config-file"; creds_collect_admin_pass; printf "%s" "$ZBX_ADMIN_PASSWORD"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "from-config-file" ]
+}
+
 @test "creds_write_summary is a no-op when PLAN_CREDS_FILE is none" {
   cprobe 'PLAN_CREDS_FILE=none; creds_write_summary; echo done'
   [ "$status" -eq 0 ]
@@ -68,4 +108,29 @@ cprobe() {
     ZBX_DB_PASSWORD="pw"; creds_write_summary; echo "survived"'
   [ "$status" -eq 0 ]
   [[ "$output" == *"survived"* ]]
+}
+
+@test "creds_write_summary omits the Admin password line when a value is set but the change was never confirmed" {
+  local f="$BATS_TEST_TMPDIR/creds-admin-unconfirmed.txt"
+  cprobe 'core_color_init; core_log_init; DRY_RUN=0; STATE_FILE="'"$BATS_TEST_TMPDIR"'/state-unconfirmed";
+    PLAN_CREDS_FILE="'"$f"'"; PLAN_DB_ENGINE=mariadb; ZBX_DB_PASSWORD="pw";
+    ZBX_ADMIN_PASSWORD="attempted-but-not-confirmed";
+    creds_write_summary'
+  [ "$status" -eq 0 ]
+  run cat "$f"
+  [[ "$output" != *"attempted-but-not-confirmed"* ]]
+  [[ "$output" != *"Frontend Admin password"* ]]
+}
+
+@test "creds_write_summary includes the Admin password line once the change is confirmed done" {
+  local f="$BATS_TEST_TMPDIR/creds-admin-confirmed.txt"
+  local s="$BATS_TEST_TMPDIR/state-confirmed"
+  printf 'adminpass=done\n' >"$s"
+  cprobe 'core_color_init; core_log_init; DRY_RUN=0; STATE_FILE="'"$s"'";
+    PLAN_CREDS_FILE="'"$f"'"; PLAN_DB_ENGINE=mariadb; ZBX_DB_PASSWORD="pw";
+    ZBX_ADMIN_PASSWORD="new-admin-pw";
+    creds_write_summary'
+  [ "$status" -eq 0 ]
+  run cat "$f"
+  [[ "$output" == *"Frontend Admin password: new-admin-pw"* ]]
 }

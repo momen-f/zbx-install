@@ -255,6 +255,50 @@ fake_tool() {
   [[ "$output" == *"change this password now"* ]]
 }
 
+# --- Admin-login branches (§15 gotcha 8) --------------------------------------
+
+@test "health_print_summary shows the changed-password message (with creds file) once adminpass is confirmed done" {
+  local s="$BATS_TEST_TMPDIR/state-admin1"
+  printf 'adminpass=done\n' >"$s"
+  hprobe 'core_color_init; DRY_RUN=0; LOG_FILE=/tmp/x.log; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/etc";
+    STATE_FILE="'"$s"'"; PLAN_COMPONENTS=server,frontend,agent; PLAN_DB_ENGINE=mariadb;
+    PLAN_CREDS_FILE="'"$BATS_TEST_TMPDIR"'/creds-admin1.txt"; PLAN_AGENT_TYPE=zabbix-agent2;
+    ZBX_ADMIN_PASSWORD=newpw; ZBX_DEGRADED_STEPS=();
+    health_print_summary'
+  [[ "$output" == *"Admin login:"*"changed — see the credentials file below"* ]]
+  [[ "$output" != *"Default login"* ]]
+  [[ "$output" != *"Admin / zabbix"* ]]
+}
+
+@test "health_print_summary shows the changed-password message (no creds file) once adminpass is confirmed done" {
+  local s="$BATS_TEST_TMPDIR/state-admin2"
+  printf 'adminpass=done\n' >"$s"
+  hprobe 'core_color_init; DRY_RUN=0; LOG_FILE=/tmp/x.log; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/etc";
+    STATE_FILE="'"$s"'"; PLAN_COMPONENTS=server,frontend,agent; PLAN_DB_ENGINE=mariadb;
+    PLAN_CREDS_FILE=none; PLAN_AGENT_TYPE=zabbix-agent2;
+    ZBX_ADMIN_PASSWORD=newpw; ZBX_DEGRADED_STEPS=();
+    health_print_summary'
+  [[ "$output" == *"Admin login:"*"changed to the password you provided"* ]]
+  [[ "$output" != *"credentials file below"* ]]
+  [[ "$output" != *"Default login"* ]]
+}
+
+# Regression guard: a resolved-but-never-confirmed password (the change was
+# attempted and failed, or was skipped via err_menu) must NOT claim success —
+# the state file, not merely ZBX_ADMIN_PASSWORD being non-empty, is the only
+# thing allowed to flip this message. Worth pinning explicitly since a
+# regression here would silently tell a user their old default login no
+# longer works, when it actually still does.
+@test "health_print_summary still shows the default-login warning when adminpass was never confirmed done" {
+  hprobe 'core_color_init; DRY_RUN=0; LOG_FILE=/tmp/x.log; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/etc";
+    STATE_FILE="'"$BATS_TEST_TMPDIR"'/state-admin3-nonexistent";
+    PLAN_COMPONENTS=server,frontend,agent; PLAN_DB_ENGINE=mariadb; PLAN_CREDS_FILE=none;
+    PLAN_AGENT_TYPE=zabbix-agent2; ZBX_ADMIN_PASSWORD=attempted-but-not-confirmed; ZBX_DEGRADED_STEPS=();
+    health_print_summary'
+  [[ "$output" == *"Default login:   Admin / zabbix"* ]]
+  [[ "$output" != *"changed"* ]]
+}
+
 @test "health_print_summary shows a degraded note (not the clean banner) when steps were skipped" {
   hprobe 'core_color_init; DRY_RUN=0; LOG_FILE=/tmp/x.log; ZBX_ETC_DIR="'"$BATS_TEST_TMPDIR"'/etc";
     PLAN_COMPONENTS=agent; PLAN_AGENT_TYPE=zabbix-agent2; PLAN_CREDS_FILE=none;

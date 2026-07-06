@@ -114,6 +114,12 @@ jobs:
   # couple of summary fields. Unattended mode exits 6 immediately on any
   # health-check failure (§13) — the install genuinely has to be correct,
   # not just "not crash", for this job to pass.
+  # --admin-pass acceptance (§15.8): the same real run also opts into
+  # changing the frontend Admin password — verified below with two real
+  # JSON-RPC user.login calls against the live Zabbix instance: the new
+  # generated password must work, and the old Admin/zabbix default must not,
+  # proving the API call genuinely took effect rather than just being
+  # attempted.
   #
   # db_mysql_provision() drives the DB through systemctl (unit detection +
   # enable --now), same as it would on a real target — a bare `docker run`
@@ -176,7 +182,7 @@ jobs:
             set -e
             ${{ matrix.setup }}
             set +e
-            bash dist/zbx-install.sh --express --yes --no-color --log-file /var/log/zbx.log >/tmp/install.out 2>&1
+            bash dist/zbx-install.sh --express --yes --admin-pass --generate-passwords --no-color --log-file /var/log/zbx.log >/tmp/install.out 2>&1
             rc=$?
             set -e
             echo "=== installer stdout (always shown) ==="
@@ -202,7 +208,22 @@ jobs:
             grep -qi zabbix /tmp/frontend.html
             echo "=== verifying all 9 health checks passed and the summary printed ==="
             grep -q "All checks passed" /tmp/install.out
-            grep -q "Admin / zabbix" /tmp/install.out
+            grep -q "Admin login:" /tmp/install.out
             grep -q "http://.*/zabbix/" /tmp/install.out
             grep -qi "uninstall" /tmp/install.out
+            echo "=== verifying --admin-pass actually changed the frontend Admin password (§15.8) ==="
+            adminpw="$(sed -n "s/^Frontend Admin password: //p" /root/zbx-install-credentials.txt)"
+            test -n "$adminpw"
+            ! grep -qF "$adminpw" /var/log/zbx.log
+            ! grep -qF "$adminpw" /tmp/install.out
+            newlogin="$(curl -fsS -X POST -H "Content-Type: application/json" \
+              -d "{\"jsonrpc\":\"2.0\",\"method\":\"user.login\",\"params\":{\"username\":\"Admin\",\"password\":\"$adminpw\"},\"id\":1}" \
+              http://127.0.0.1/zabbix/api_jsonrpc.php)"
+            echo "login with the new password: $newlogin"
+            case "$newlogin" in *'"error"'*) echo "new password login failed"; exit 1 ;; esac
+            oldlogin="$(curl -fsS -X POST -H "Content-Type: application/json" \
+              -d "{\"jsonrpc\":\"2.0\",\"method\":\"user.login\",\"params\":{\"username\":\"Admin\",\"password\":\"zabbix\"},\"id\":2}" \
+              http://127.0.0.1/zabbix/api_jsonrpc.php)"
+            echo "login with the old default password: $oldlogin"
+            case "$oldlogin" in *'"error"'*) : ;; *) echo "old default password still works — password was not actually changed"; exit 1 ;; esac
           '

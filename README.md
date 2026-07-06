@@ -23,7 +23,9 @@ firewall, starts services, and runs 9 post-install health checks.
   imported automatically
 - Apache or Nginx, pre-configured to skip the setup wizard
 - firewalld/ufw rules and RHEL SELinux booleans, opened for you
-- A final report: frontend URL, default login, config/log paths, and an
+- Optionally, a changed frontend Admin password instead of the `zabbix`
+  default (`--admin-pass`)
+- A final report: frontend URL, login status, config/log paths, and an
   uninstall one-liner
 
 ## Modes

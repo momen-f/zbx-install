@@ -8,7 +8,8 @@
 #             CLI parsing already sets (OPT_ZBX_VERSION, OPT_DB, OPT_WEB,
 #             OPT_COMPONENTS, OPT_UPDATE, OPT_GENPASS, OPT_CREDS_FILE,
 #             OPT_TZ, OPT_OPEN_FIREWALL, OPT_AGENT_TYPE, OPT_SERVER_IP,
-#             OPT_TIMESCALE), creds.sh's ZBX_DB_PASSWORD/ZBX_DB_ADMIN_PASSWORD,
+#             OPT_TIMESCALE, OPT_ADMIN_PASS), creds.sh's
+#             ZBX_DB_PASSWORD/ZBX_DB_ADMIN_PASSWORD/ZBX_ADMIN_PASSWORD,
 #             main.sh's ASSUME_YES, and CFGFILE_MODE (the resolved
 #             express/custom/agent-only sub-mode) — so --config reuses the
 #             exact same resolve_plan -> prepare_plan -> plan_packages path
@@ -28,7 +29,7 @@ CFGFILE_MODE=""
 readonly -a CFGFILE_KEYS=(
   MODE ZBX_VERSION COMPONENTS DB_ENGINE DB_PASS DB_ADMIN_PASS WEB_SERVER
   PHP_TZ UPDATE_SYSTEM OPEN_FIREWALL GENERATE_PASSWORDS CREDS_FILE
-  AGENT_TYPE ZBX_SERVER_IP TIMESCALEDB ASSUME_YES
+  AGENT_TYPE ZBX_SERVER_IP TIMESCALEDB ASSUME_YES ADMIN_PASS
 )
 
 _cfgfile_is_known_key() {
@@ -52,7 +53,7 @@ _cfgfile_validate() {
     UPDATE_SYSTEM | OPEN_FIREWALL | GENERATE_PASSWORDS | TIMESCALEDB | ASSUME_YES)
       [[ "$val" =~ ^(yes|no)$ ]] && ok=0
       ;;
-    CREDS_FILE | DB_PASS | DB_ADMIN_PASS | PHP_TZ | ZBX_SERVER_IP) ok=0 ;;
+    CREDS_FILE | DB_PASS | DB_ADMIN_PASS | PHP_TZ | ZBX_SERVER_IP | ADMIN_PASS) ok=0 ;;
   esac
   ((ok == 0)) && return 0
   CFGFILE_ERR="invalid value for $key: '$val'"
@@ -86,6 +87,17 @@ _cfgfile_apply() {
     ZBX_SERVER_IP) OPT_SERVER_IP="$val" ;;
     TIMESCALEDB) OPT_TIMESCALE="$val" ;;
     ASSUME_YES) [[ "$val" == "yes" ]] && ASSUME_YES=1 ;;
+    ADMIN_PASS)
+      OPT_ADMIN_PASS=1
+      # "generate" is a sentinel, not a literal password (§10 recommends a
+      # fresh generated one over a human-chosen value anyway) — leave
+      # ZBX_ADMIN_PASSWORD empty so creds_collect_admin_pass's own
+      # UNATTENDED-implies-generate fallback fires, same as DB_PASS unset.
+      if [[ "$val" != "generate" ]]; then
+        ZBX_ADMIN_PASSWORD="$val"
+        core_register_secret "$val"
+      fi
+      ;;
   esac
 }
 

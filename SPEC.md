@@ -77,6 +77,7 @@ zbx-install/
 │       ├── detect.sh       # environment scan → DETECT_* variables
 │       ├── recommend.sh    # detection → recommended stack
 │       ├── creds.sh        # credential collection, generation, redaction
+│       ├── configfile.sh   # --config FILE parser (Appendix A)
 │       ├── repo.sh         # zabbix-release URL builder + repo setup
 │       ├── pkg.sh          # apt/dnf/zypper abstraction (update, install, remove)
 │       ├── db_mysql.sh     # MariaDB/MySQL provisioning + schema import
@@ -84,7 +85,8 @@ zbx-install/
 │       ├── config.sh       # render zabbix_server.conf, PHP tz, web vhost, zabbix.conf.php
 │       ├── firewall.sh     # firewalld/ufw + SELinux handling
 │       ├── services.sh     # enable/start/restart with per-distro service names
-│       └── health.sh       # post-install checks + remediation hints
+│       ├── health.sh       # post-install checks + remediation hints
+│       └── adminpass.sh    # optional post-install frontend Admin password change (§15.8)
 ├── build.sh                # bundles src/ → dist/zbx-install.sh (single file)
 ├── Makefile                # lint / fmt / test / matrix / build
 ├── tests/
@@ -95,7 +97,7 @@ zbx-install/
 └── README.md               # one-liner, flags, support matrix, screenshots
 ```
 
-**Bundling rule:** each lib sources nothing at runtime when bundled. In `src/`, `main.sh` sources libs with lines tagged `# @dev-source`; `build.sh` concatenates files in a fixed order (core → ui → detect → recommend → creds → repo → pkg → db_* → config → firewall → services → health → main), strips the `# @dev-source` lines, prepends a header with version + build date, and writes `dist/zbx-install.sh`. Run shellcheck against both `src/` and the bundle. Releases publish `dist/zbx-install.sh` + `SHA256SUMS`.
+**Bundling rule:** each lib sources nothing at runtime when bundled. In `src/`, `main.sh` sources libs with lines tagged `# @dev-source`; `build.sh` concatenates files in a fixed order (core → ui → detect → recommend → creds → configfile → repo → pkg → db_* → config → firewall → services → health → adminpass → main), strips the `# @dev-source` lines, prepends a header with version + build date, and writes `dist/zbx-install.sh`. Run shellcheck against both `src/` and the bundle. Releases publish `dist/zbx-install.sh` + `SHA256SUMS`.
 
 ---
 
@@ -133,6 +135,7 @@ Options
   --components LIST       comma list: server,frontend,agent (agent2 implied)
   --update / --no-update  force/skip the system-update step
   --generate-passwords    auto-generate all secrets without prompting
+  --admin-pass            also change the frontend Admin password (§15.8)
   --creds-file PATH       where to write the credentials summary (default:
                           /root/zbx-install-credentials.txt; use "none" to skip)
   --log-file PATH         default /var/log/zbx-install-<timestamp>.log
@@ -297,7 +300,9 @@ SELinux enforcing (RHEL): ensure `zabbix-selinux-policy` installed, `setsebool -
 | 8 | frontend HTTP | `curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1/zabbix/` (accept 200/302) | web conf, SELinux booleans, php-fpm |
 | 9 | agent answers | `zabbix_get -s 127.0.0.1 -k agent.ping` = 1 (if zabbix-get installed) | agent `Server=` line |
 
-All pass → green summary block: frontend URL(s) built from detected IPs, **default login `Admin` / `zabbix` + bold "change it now" warning**, config file paths, log paths, DB name/user, creds-file path if written, and an uninstall one-liner. Any fail → red block listing failed checks with hints and the log path, then the error menu: re-run checks · view logs · continue to summary anyway (marked degraded) · exit 6. Unattended: exit 6.
+All pass → green summary block: frontend URL(s) built from detected IPs, **default login `Admin` / `zabbix` + bold "change it now" warning** (or, if `--admin-pass`/`ADMIN_PASS` was given, confirmation that it was already changed — see §15.8), config file paths, log paths, DB name/user, creds-file path if written, and an uninstall one-liner. Any fail → red block listing failed checks with hints and the log path, then the error menu: re-run checks · view logs · continue to summary anyway (marked degraded) · exit 6. Unattended: exit 6.
+
+If `--admin-pass`/`ADMIN_PASS` was given, the frontend Admin password is changed via the API (`adminpass.sh`, §15.8) after these 9 checks pass but before the summary prints — its own retry/skip/log error menu (no "back to plan", same reasoning as health) never blocks an otherwise-successful install.
 
 ---
 
@@ -346,7 +351,7 @@ Skeleton requirements:
 5. SLES: frontend needs PHP from the **Web and Scripting Module**; some deps live in **PackageHub** — activate via `SUSEConnect -p` / `zypper ar` before frontend install on SLES proper (Leap unaffected). Detect and print the exact activation command instead of failing cryptically.
 6. Ubuntu ufw is installed but inactive by default → treat "inactive" as "none" but mention it in the plan.
 7. MariaDB unit name varies (`mariadb`/`mysqld`/`mysql`) → detect, don't hardcode (§12.3).
-8. Frontend default login is `Admin`/`zabbix` → always warn; Phase 7 optional `--admin-pass` changes it via the API (`user.update` after login with defaults) — keep out of v1 core.
+8. Frontend default login is `Admin`/`zabbix` → always warn; opt-in `--admin-pass` (or `ADMIN_PASS` in a `--config` file) changes it via the API (`user.login` then `user.update` with `current_passwd` set to the known default) after health checks confirm the frontend is reachable. Auth token goes in an `Authorization: Bearer` header, never the deprecated `auth` body param (current API, 7.0/7.4). `passwd` (not `password`) is the API's field name for the new value. Gated on **both** `frontend` and `server` being in this plan's components, not frontend alone — the known Admin/zabbix default only applies to a schema this install itself just imported, not to a frontend pointed at a remote/pre-existing database.
 9. TimescaleDB ↔ PostgreSQL major-version matching (§12.3.4).
 10. arm64: Zabbix repos cover most but not all family/version combos → if `DETECT_ARCH=aarch64` and the repo probe (§12.1) fails, say so explicitly in the error menu ("no repo for this arch/OS combo": agent-only fallback if the agent repo resolves · exit 3).
 11. Frontend setup wizard is skipped only if `zabbix.conf.php` is valid and readable by the web user — get ownership/mode right (§12.4).
@@ -382,7 +387,7 @@ Strict mode everywhere; `readonly` for constants; `local` in every function; no 
 | 4 | `creds.sh` + both DB modules | Schema imported; secrets never in ps/logs (grep the log in the test) |
 | 5 | `config.sh`, `firewall.sh`, `services.sh` | Frontend reachable without setup wizard on E2E |
 | 6 | `health.sh` + summary | All 9 checks green on E2E; failure path renders the error menu with hints |
-| 7 | Unattended (`--config`), `--agent-only`, `--uninstall`, resume, (stretch: proxy, `--admin-pass`) | Config-file install with zero prompts; uninstall leaves DB engine |
+| 7 | Unattended (`--config`), `--agent-only`, `--uninstall`, resume, `--admin-pass` (stretch: proxy) | Config-file install with zero prompts; uninstall leaves DB engine |
 | 8 | Bootstrap polish, README (curl one-liner front and center), release workflow, tag `v0.1.0` | Fresh VM: one-liner → working Zabbix |
 
 ---
@@ -390,7 +395,7 @@ Strict mode everywhere; `readonly` for constants; `local` in every function; no 
 
 ## Appendix A — config file keys (`--config`)
 
-`MODE` (express|custom|agent-only) · `ZBX_VERSION` (7.0|7.4) · `COMPONENTS` (comma list: server,frontend,agent) · `DB_ENGINE` (mariadb|mysql|pgsql) · `DB_PASS` · `DB_ADMIN_PASS` (only for pre-existing MySQL root) · `WEB_SERVER` (apache|nginx) · `PHP_TZ` · `UPDATE_SYSTEM` (yes|no) · `OPEN_FIREWALL` (yes|no) · `GENERATE_PASSWORDS` (yes|no — autogen anything unset) · `CREDS_FILE` (path|none) · `AGENT_TYPE` (agent2|agent) · `ZBX_SERVER_IP` (agent-only mode) · `TIMESCALEDB` (yes|no) · `ASSUME_YES` (yes|no)
+`MODE` (express|custom|agent-only) · `ZBX_VERSION` (7.0|7.4) · `COMPONENTS` (comma list: server,frontend,agent) · `DB_ENGINE` (mariadb|mysql|pgsql) · `DB_PASS` · `DB_ADMIN_PASS` (only for pre-existing MySQL root) · `WEB_SERVER` (apache|nginx) · `PHP_TZ` · `UPDATE_SYSTEM` (yes|no) · `OPEN_FIREWALL` (yes|no) · `GENERATE_PASSWORDS` (yes|no — autogen anything unset) · `CREDS_FILE` (path|none) · `AGENT_TYPE` (agent2|agent) · `ZBX_SERVER_IP` (agent-only mode) · `TIMESCALEDB` (yes|no) · `ASSUME_YES` (yes|no) · `ADMIN_PASS` (a literal password, or `generate` to auto-generate — opts into §15 gotcha 8, frontend-only)
 
 Parser rules: `KEY=VALUE` lines, `#` comments, unknown keys → hard error (catches typos), file must be `0600` or a warning is printed. Secrets in the file are honored but the summary reminds the user to delete it.
 

@@ -81,6 +81,20 @@ CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
   [ "$output" = "rlsb" ]
 }
 
+# adminpass (§15.8) runs even later than health in the pipeline, so "back to
+# plan" makes no more sense for it than it does for health — same rls set,
+# but generic Retry/Skip* labels (no health-specific wording).
+@test "_errmenu_opts_for adminpass omits back-to-plan and uses generic (not health-specific) labels" {
+  run bash -c 'source "'"$CORE"'"; _errmenu_opts_for adminpass'
+  [ "$output" = "rls" ]
+  run bash -c 'source "'"$CORE"'"; _errmenu_print_options adminpass rls'
+  [[ "$output" == *"[r] Retry"* ]]
+  [[ "$output" == *"[s] Skip*"* ]]
+  [[ "$output" != *"[b] Back to plan"* ]]
+  [[ "$output" != *"Re-run checks"* ]]
+  [[ "$output" != *"Continue to summary anyway"* ]]
+}
+
 # Regression coverage for Phase 7's resume flow (§14/§18): resume_check
 # (main.sh) decides interactive-vs-skip purely from these two helpers, so
 # their edge cases (missing file, empty file, actually-has-progress) matter

@@ -171,6 +171,13 @@ core_state_clear() {
 
 # --- error menu (§14) — the no-exit policy ----------------------------------
 # Map a STEP_ID to its Appendix B exit code (used on explicit Exit / unattended).
+# adminpass has no dedicated Appendix B code (it's a stretch feature added
+# after the code table was fixed) — 7 ("user abort") is Appendix B's own
+# generic bucket, and an admin-pass failure genuinely is just that: a
+# skippable, non-essential step the user declined or that failed, not a
+# distinct category worth reserving a new code for. Listed explicitly
+# (not left to the "*" fallback) so this is a documented choice, not an
+# accident — every other pipeline step gets an explicit case.
 core_exit_code_for() {
   case "$1" in
     detect) echo 3 ;;
@@ -178,6 +185,7 @@ core_exit_code_for() {
     repo | packages | config | firewall | services) echo 5 ;;
     health) echo 6 ;;
     db) echo 8 ;;
+    adminpass) echo 7 ;;
     *) echo 7 ;;
   esac
 }
@@ -202,14 +210,16 @@ die() {
 # steps get the generic fallback. v (pick a different Zabbix version),
 # c (re-enter credentials), and s (skip) are step-specific: skip must never
 # appear for repo/packages/db (§14: "never" — a half-installed repo, package
-# set, or DB can't be skipped over). health has no "back to plan" (§13 lists
-# re-run/log/continue-anyway only, not back).
+# set, or DB can't be skipped over). health and adminpass have no "back to
+# plan" — both run after everything else has already succeeded, so redoing
+# the whole pipeline from scratch makes no sense (§13 lists re-run/log/
+# continue-anyway only, not back, for health; adminpass mirrors it).
 _errmenu_opts_for() {
   case "$1" in
     repo) echo "rvl" ;;
     packages) echo "rl" ;;
     db) echo "rcl" ;;
-    health) echo "rls" ;;
+    health | adminpass) echo "rls" ;;
     *) echo "rlsb" ;;
   esac
 }

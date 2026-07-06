@@ -39,6 +39,8 @@ source "$_SRC_DIR/lib/firewall.sh" # @dev-source
 source "$_SRC_DIR/lib/services.sh" # @dev-source
 # shellcheck source=lib/health.sh
 source "$_SRC_DIR/lib/health.sh" # @dev-source
+# shellcheck source=lib/adminpass.sh
+source "$_SRC_DIR/lib/adminpass.sh" # @dev-source
 
 # Version/date: injected by build.sh; fall back to the VERSION file in dev.
 main_version() {
@@ -72,6 +74,8 @@ Options
   --components LIST       comma list: server,frontend,agent (agent2 implied)
   --update / --no-update  force/skip the system-update step
   --generate-passwords    auto-generate all secrets without prompting
+  --admin-pass            also change the frontend Admin password (prompted,
+                          or auto-generated with --generate-passwords)
   --creds-file PATH       where to write the credentials summary
   --log-file PATH         default /var/log/zbx-install-<timestamp>.log
   --no-color              disable ANSI colors (also honors NO_COLOR)
@@ -87,7 +91,7 @@ FORCED_FAMILY=0
 RESUME=0
 CUR_MODE=""
 OPT_ZBX_VERSION="" OPT_DB="" OPT_WEB="" OPT_COMPONENTS=""
-OPT_UPDATE="" OPT_GENPASS=0 OPT_CREDS_FILE=""
+OPT_UPDATE="" OPT_GENPASS=0 OPT_CREDS_FILE="" OPT_ADMIN_PASS=0
 # Appendix A keys with no CLI-flag equivalent (SPEC §7 offers none) — only
 # configfile.sh's --config parsing ever sets these; resolve_plan (recommend.sh)
 # consults them the same way it does the flag-backed OPT_* above.
@@ -174,6 +178,7 @@ parse_args() {
       --update) OPT_UPDATE="yes" ;;
       --no-update) OPT_UPDATE="no" ;;
       --generate-passwords) OPT_GENPASS=1 ;;
+      --admin-pass) OPT_ADMIN_PASS=1 ;;
       --creds-file)
         _need_val "$1" "${2:-}"
         OPT_CREDS_FILE="$2"
@@ -511,6 +516,7 @@ prepare_plan() {
   resolve_update
   resolve_tz
   creds_collect
+  creds_collect_admin_pass
 }
 
 # plan_confirm — §1.7: nothing executes before explicit confirmation.
@@ -535,7 +541,9 @@ run_pipeline() {
   core_state_init
   local label="Running the implemented steps (repo, packages"
   if plan_has server; then label+=", database"; fi
-  label+=", config, firewall, services, health)"
+  label+=", config, firewall, services, health"
+  [[ -n "$ZBX_ADMIN_PASSWORD" ]] && label+=", admin-pass"
+  label+=")"
   [[ "$DRY_RUN" == "1" ]] && label+=" — dry-run"
   printf '\n%s%s%s\n' "$C_BOLD" "$label" "$C_RESET"
 
@@ -558,6 +566,7 @@ run_pipeline() {
   _pipeline_step firewall firewall_apply || return "$PIPELINE_BACK"
   _pipeline_step services services_start || return "$PIPELINE_BACK"
   _pipeline_step health health_run_checks || return "$PIPELINE_BACK"
+  _pipeline_step adminpass admin_pass_update || return "$PIPELINE_BACK"
   health_print_summary
   return 0
 }

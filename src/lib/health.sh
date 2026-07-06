@@ -2,9 +2,9 @@
 # health.sh — post-install checks + the final install summary (§13).
 #
 # Contract:
-#   inputs  : PLAN_* (recommend.sh), ZBX_DB_PASSWORD (creds.sh), DETECT_FAMILY
-#             (detect.sh), ZBX_ETC_DIR (config.sh), ZBX_DEGRADED_STEPS
-#             (core.sh).
+#   inputs  : PLAN_* (recommend.sh), ZBX_DB_PASSWORD/ZBX_ADMIN_PASSWORD
+#             (creds.sh), DETECT_FAMILY (detect.sh), ZBX_ETC_DIR (config.sh),
+#             ZBX_DEGRADED_STEPS (core.sh).
 #   outputs : health_run_checks() runs only the §13 checks this plan's
 #             components need, prints a red failure block with hints on any
 #             failure, and returns 0/1 — it never prints the green summary
@@ -236,7 +236,15 @@ health_print_summary() {
     ip="$(_health_detect_ip)"
     printf '\n  Frontend:        http://%s/zabbix/\n' "$ip"
     [[ "$ip" != "127.0.0.1" ]] && printf '                   http://127.0.0.1/zabbix/\n'
-    printf '  %sDefault login:   Admin / zabbix — change this password now.%s\n' "$C_BOLD" "$C_RESET"
+    if [[ -n "${ZBX_ADMIN_PASSWORD:-}" ]] && core_state_is_done adminpass; then
+      if [[ "$PLAN_CREDS_FILE" != "none" && -n "$PLAN_CREDS_FILE" ]]; then
+        printf '  %sAdmin login:     Admin / (changed — see the credentials file below)%s\n' "$C_BOLD" "$C_RESET"
+      else
+        printf '  %sAdmin login:     Admin / (changed to the password you provided)%s\n' "$C_BOLD" "$C_RESET"
+      fi
+    else
+      printf '  %sDefault login:   Admin / zabbix — change this password now.%s\n' "$C_BOLD" "$C_RESET"
+    fi
   fi
 
   printf '\n  Config files:\n'

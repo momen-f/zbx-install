@@ -4,8 +4,10 @@
 # why).
 
 CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
+UI="${BATS_TEST_DIRNAME}/../../src/lib/ui.sh"
 DETECT="${BATS_TEST_DIRNAME}/../../src/lib/detect.sh"
 REC="${BATS_TEST_DIRNAME}/../../src/lib/recommend.sh"
+CREDS="${BATS_TEST_DIRNAME}/../../src/lib/creds.sh"
 CFGFILE="${BATS_TEST_DIRNAME}/../../src/lib/configfile.sh"
 
 # cprobe SNIPPET — run SNIPPET with every dependency configfile.sh needs
@@ -78,6 +80,45 @@ mkcfg() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"pw=s3cr3t-one admin=s3cr3t-two"* ]]
   [[ "$output" == *"******** and ********"* ]]
+}
+
+@test "cfgfile_parse: ADMIN_PASS=<value> enables the feature, sets the value, and registers it as a secret" {
+  local f
+  f="$(mkcfg 'MODE=express' 'ADMIN_PASS=s3cr3t-admin-frontend')"
+  cprobe 'cfgfile_parse "'"$f"'" && printf "opt=%s pw=%s\n" "$OPT_ADMIN_PASS" "$ZBX_ADMIN_PASSWORD" && printf "s3cr3t-admin-frontend\n" | core_redact'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"opt=1 pw=s3cr3t-admin-frontend"* ]]
+  [[ "$output" == *"********"* ]]
+}
+
+@test "cfgfile_parse: ADMIN_PASS=generate enables the feature but leaves the value empty for auto-generation" {
+  local f
+  f="$(mkcfg 'MODE=express' 'ADMIN_PASS=generate')"
+  cprobe 'cfgfile_parse "'"$f"'" && printf "opt=%s pw=[%s]\n" "$OPT_ADMIN_PASS" "${ZBX_ADMIN_PASSWORD:-}"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "opt=1 pw=[]" ]
+}
+
+@test "cfgfile_parse: without an ADMIN_PASS key, the feature stays off" {
+  local f
+  f="$(mkcfg 'MODE=express')"
+  cprobe 'cfgfile_parse "'"$f"'" && printf "opt=%s pw=[%s]\n" "${OPT_ADMIN_PASS:-0}" "${ZBX_ADMIN_PASSWORD:-}"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "opt=0 pw=[]" ]
+}
+
+# End-to-end composition check (not just each module's own unit test): an
+# explicit ADMIN_PASS=<value> must survive all the way through
+# creds_collect_admin_pass even when GENERATE_PASSWORDS=yes is also set in
+# the same file — the explicit value must win, not be silently regenerated.
+@test "cfgfile_parse + creds_collect_admin_pass: an explicit ADMIN_PASS wins over GENERATE_PASSWORDS=yes in the same file" {
+  local f
+  f="$(mkcfg 'MODE=express' 'COMPONENTS=server,frontend,agent' 'GENERATE_PASSWORDS=yes' 'ADMIN_PASS=explicit-from-file')"
+  run bash -c 'source "'"$CORE"'"; source "'"$UI"'"; source "'"$DETECT"'"; source "'"$REC"'"; source "'"$CREDS"'"; source "'"$CFGFILE"'";
+    USE_COLOR=0; core_color_init; LOG_FILE=/dev/null; UNATTENDED=1; PLAN_COMPONENTS=server,frontend,agent;
+    cfgfile_parse "'"$f"'" && creds_collect_admin_pass && printf "%s" "$ZBX_ADMIN_PASSWORD"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "explicit-from-file" ]
 }
 
 @test "cfgfile_parse: AGENT_TYPE maps agent2/agent to the zabbix-agent2/zabbix-agent package name" {
