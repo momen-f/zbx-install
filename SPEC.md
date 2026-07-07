@@ -55,7 +55,7 @@
 
 Match on `ID` first, fall back to `ID_LIKE`. Architecture: `x86_64` fully supported; `aarch64` only where Zabbix publishes packages for that distro (*verify at build time*), otherwise print a clear unsupported message.
 
-**Zabbix versions offered:** `7.0` LTS (**default recommendation**) and `7.4` (current stable; 7.4.11 as of June 2026). Keep `SUPPORTED_ZBX_VERSIONS=("7.0" "7.4")` in exactly one place in `detect.sh` so adding `8.0` LTS when it ships is a one-line change. Do not offer 6.0.
+**Zabbix versions offered:** `7.0` LTS (**default recommendation**) and `7.4` (current stable; 7.4.11 as of June 2026). Three arrays in `detect.sh` govern this: `SUPPORTED_ZBX_VERSIONS` (the offered list), `ZBX_LTS_VERSIONS` (which of them are LTS — a set, since more than one can be LTS at once), and `ZBX_DEFAULT_VERSION` (the default recommendation). Only GA releases are offered; adding `8.0` LTS when it reaches GA means appending it to the first two arrays. Do not offer 6.0.
 
 **DB engines:** MariaDB (default), MySQL 8.x, PostgreSQL 15/16 with optional TimescaleDB. Embed a per-Zabbix-version minimum-version map (`REQ_MYSQL`, `REQ_MARIADB`, `REQ_PGSQL`) and validate the detected/installed engine against it; populate the map from https://www.zabbix.com/documentation/7.0/en/manual/installation/requirements and the 7.4 equivalent (*verify at build time*). **SQLite3** is offered only as a Zabbix **proxy** backend (embedded, self-initializing) — never a server/frontend option (§15.9).
 
@@ -176,7 +176,7 @@ Produce a set of `DETECT_*` readonly variables plus a pretty table for `--detect
 
 Deterministic rules, applied to detection output — no magic:
 
-1. **Zabbix version:** latest entry of `SUPPORTED_ZBX_VERSIONS` marked LTS → default `7.0`; offer `7.4` as "current stable".
+1. **Zabbix version:** default to `ZBX_DEFAULT_VERSION` (the newest LTS, currently `7.0`); versions listed in `ZBX_LTS_VERSIONS` are labeled "LTS", the rest "current stable" (e.g. `7.4`).
 2. **DB engine:** if PostgreSQL already installed and healthy → suggest `pgsql`; else if MySQL/MariaDB already installed → suggest `mysql`; else default **MariaDB**.
 3. **Web server:** if nginx present and apache absent → nginx; else Apache.
 4. **Components:** full stack (server+frontend+agent2) unless RAM < 2 GiB → warn and suggest agent-only.

@@ -27,6 +27,20 @@ rprobe() {
   [ "$output" = "LTS|current stable" ]
 }
 
+@test "_zbx_is_lts recognizes LTS releases, excludes standard and not-yet-GA ones" {
+  # 7.0 is LTS; 7.4 is a standard release; 8.0 is gated out until GA, so while
+  # it is absent from ZBX_LTS_VERSIONS it must NOT be treated as LTS.
+  rprobe '_zbx_is_lts 7.0 && ! _zbx_is_lts 7.4 && ! _zbx_is_lts 8.0 && echo ok'
+  [ "$output" = "ok" ]
+}
+
+@test "the default recommendation is a separate knob from the LTS set" {
+  # ZBX_DEFAULT_VERSION drives rec_zbx_version independently of which versions
+  # are LTS, so a future multi-LTS set doesn't silently move the default.
+  rprobe 'printf "%s|%s" "$ZBX_DEFAULT_VERSION" "$(rec_zbx_version)"'
+  [ "$output" = "7.0|7.0" ]
+}
+
 # --- rule 2: DB engine -----------------------------------------------------------
 @test "rec_db_engine: nothing installed -> mariadb default" {
   rprobe 'rec_db_engine none'

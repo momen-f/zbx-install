@@ -22,11 +22,23 @@ PLAN_OPEN_FIREWALL="no" PLAN_ZBX_SERVER_IP="127.0.0.1" PLAN_CREDS_FILE=""
 PLAN_PACKAGES=""
 
 # --- pure rules (§9) -----------------------------------------------------------
-# Rule 1: default to the LTS release; 7.4 stays selectable as "current stable".
-rec_zbx_version() { printf '%s' "$ZBX_LTS_VERSION"; }
+# Rule 1: default to the newest LTS release; standard releases (e.g. 7.4) stay
+# selectable and are labeled "current stable".
+rec_zbx_version() { printf '%s' "$ZBX_DEFAULT_VERSION"; }
+
+# _zbx_is_lts VERSION — is VERSION one of the Long Term Support releases
+# (§9 rule 1)? Membership test over ZBX_LTS_VERSIONS (detect.sh), which can
+# hold more than one entry (e.g. 7.0 and a future 8.0).
+_zbx_is_lts() {
+  local v
+  for v in "${ZBX_LTS_VERSIONS[@]}"; do
+    [[ "$v" == "$1" ]] && return 0
+  done
+  return 1
+}
 
 rec_version_label() {
-  if [[ "$1" == "$ZBX_LTS_VERSION" ]]; then
+  if _zbx_is_lts "$1"; then
     printf 'LTS'
   else
     printf 'current stable'

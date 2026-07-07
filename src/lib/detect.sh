@@ -11,12 +11,26 @@
 #             (detect_os/family/supported) touch nothing but OS_RELEASE_FILE, so
 #             they are unit-testable with fixtures.
 
-# The one place the offered Zabbix versions live (§4). Adding 8.0 LTS later is a
-# one-line change here.
+# Offered Zabbix versions (§4) and their support tiers — every version choice
+# keys off these two arrays plus the default below, kept in one block.
+#
+# Only GA releases are offered. When Zabbix 8.0 LTS reaches GA (planned Q3
+# 2026 — confirm on the lifecycle page,
+# https://www.zabbix.com/life_cycle_and_release_policy, NOT the pre-release
+# packages already staged under repo.zabbix.com/zabbix/8.0/), enable it by
+# appending "8.0" to BOTH arrays:
+#     readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4" "8.0")
+#     readonly ZBX_LTS_VERSIONS=("7.0" "8.0")
+# then decide ZBX_DEFAULT_VERSION (keep "7.0" until 8.0 is proven in the
+# real-install CI, or move it to "8.0" as the newest LTS). repo.sh already
+# probes 8.0's "/release/" URL layout, so no repo change is needed.
 readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4")
-# LTS marker for the recommendation engine (§9 rule 1). Kept adjacent to the
-# list above so a future 8.0 LTS update touches this one block only.
-readonly ZBX_LTS_VERSION="7.0"
+# The subset of the above that are Long Term Support releases (7.4 is a
+# standard release). Drives the "LTS" vs "current stable" label (§9 rule 1),
+# and is a set because more than one offered version can be LTS at once.
+readonly ZBX_LTS_VERSIONS=("7.0")
+# The version the recommendation engine defaults to — the newest LTS.
+readonly ZBX_DEFAULT_VERSION="7.0"
 
 # --- DETECT_* defaults (keep set -u happy before/if a probe is skipped) ------
 DETECT_OS_ID="" DETECT_OS_LIKE="" DETECT_OS_VERSION="" DETECT_OS_MAJOR=""
