@@ -96,6 +96,7 @@ detect_supported() {
     debian) [[ "$m" == 12 || "$m" == 13 ]] && DETECT_SUPPORTED="yes" ;;
     ubuntu) [[ "$v" == 22.04 || "$v" == 24.04 ]] && DETECT_SUPPORTED="yes" ;;
     rhel | centos | rocky | almalinux | ol) [[ "$m" == 8 || "$m" == 9 ]] && DETECT_SUPPORTED="yes" ;;
+    amzn) [[ "$m" == 2023 ]] && DETECT_SUPPORTED="yes" ;;
     sles) [[ "$m" == 15 && "$minor" -ge 5 ]] && DETECT_SUPPORTED="yes" ;;
     opensuse-leap) [[ "$v" == 15.6 ]] && DETECT_SUPPORTED="yes" ;;
   esac
@@ -135,9 +136,26 @@ _arch_class() {
   esac
 }
 
+# _arch_confirmed_for_os — true on OS/version combos where Zabbix is confirmed
+# to publish arm packages, so a repo-dependent "maybe" arch can be promoted to
+# a firm "yes" (§15.10; verified against repo.zabbix.com 2026-07). Reads the
+# already-detected DETECT_OS_ID/DETECT_OS_MAJOR.
+_arch_confirmed_for_os() {
+  case "$DETECT_OS_ID" in
+    amzn) [[ "$DETECT_OS_MAJOR" == 2023 ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 detect_arch() {
   DETECT_ARCH="$(uname -m)"
   DETECT_ARCH_OK="$(_arch_class "$DETECT_ARCH")"
+  # §15.10: on the verified combos, aarch64/arm64 is first-class rather than
+  # a repo-probe gamble.
+  if [[ "$DETECT_ARCH_OK" == "maybe" ]] && _arch_confirmed_for_os; then
+    DETECT_ARCH_OK="yes"
+  fi
+  return 0
 }
 
 # --- hardware / disk (host) --------------------------------------------------

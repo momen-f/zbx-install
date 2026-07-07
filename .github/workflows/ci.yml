@@ -46,6 +46,7 @@ jobs:
           - { image: "debian:13", id: "debian", family: "debian" }
           - { image: "rockylinux:9", id: "rocky", family: "rhel" }
           - { image: "almalinux:8", id: "almalinux", family: "rhel" }
+          - { image: "amazonlinux:2023", id: "amzn", family: "rhel" }
           - { image: "opensuse/leap:15.6", id: "opensuse-leap", family: "suse" }
     steps:
       - uses: actions/checkout@v4

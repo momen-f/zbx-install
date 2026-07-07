@@ -49,6 +49,11 @@ probe() {
   [ "$output" = "almalinux 8 rhel yes" ]
 }
 
+@test "amazon linux 2023 -> supported rhel" {
+  probe os-release.amzn2023
+  [ "$output" = "amzn 2023 rhel yes" ]
+}
+
 @test "opensuse leap 15.6 -> supported suse" {
   probe os-release.leap156
   [ "$output" = "opensuse-leap 15 suse yes" ]
@@ -86,6 +91,16 @@ probe() {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
     for a in x86_64 amd64 aarch64 arm64 armv7l; do _arch_class "$a"; done | paste -sd" " -'
   [ "$output" = "yes yes maybe maybe no" ]
+}
+
+@test "_arch_confirmed_for_os: amazon linux 2023 promotes arm, others do not" {
+  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
+    DETECT_OS_ID=amzn DETECT_OS_MAJOR=2023; _arch_confirmed_for_os && a=yes || a=no;
+    DETECT_OS_ID=amzn DETECT_OS_MAJOR=2;    _arch_confirmed_for_os && b=yes || b=no;
+    DETECT_OS_ID=rocky DETECT_OS_MAJOR=9;   _arch_confirmed_for_os && c=yes || c=no;
+    DETECT_OS_ID=ubuntu DETECT_OS_MAJOR=24; _arch_confirmed_for_os && d=yes || d=no;
+    echo "$a $b $c $d"'
+  [ "$output" = "yes no no no" ]
 }
 
 @test "_osr_get strips quotes and preserves inner spaces" {

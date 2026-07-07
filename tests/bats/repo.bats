@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Unit tests for repo.sh's pure URL builder (§12.1, §16: "bats unit tests for
 # pure logic: URL builder"). Every pattern here was verified live against
-# repo.zabbix.com on 2026-07-05 — see BUILD_REFERENCE.md Phase 3 entry.
+# repo.zabbix.com (rhel/debian/suse 2026-07-05; amazonlinux 2026-07).
 #
 # Sourcing happens inside `bash -c` subshells (see redact.bats for why).
 
@@ -39,6 +39,23 @@ rprobe() {
 @test "zbx_release_url dnf legacy: rhel major 9 / 7.4 uses noarch/, not the arch dir" {
   rprobe 'zbx_release_url legacy rhel rocky "" 9 7.4 x86_64'
   [ "$output" = "https://repo.zabbix.com/zabbix/7.4/release/rhel/9/noarch/zabbix-release-latest-7.4.el9.noarch.rpm" ]
+}
+
+# --- dnf (amazon linux) --------------------------------------------------------
+# Amazon Linux uses amazonlinux/<ver> + .amzn<ver>, not rhel/.el<major>.
+@test "zbx_release_url dnf flat: amzn 2023 / 7.0 / x86_64" {
+  rprobe 'zbx_release_url flat rhel amzn 2023 2023 7.0 x86_64'
+  [ "$output" = "https://repo.zabbix.com/zabbix/7.0/amazonlinux/2023/x86_64/zabbix-release-latest-7.0.amzn2023.noarch.rpm" ]
+}
+
+@test "zbx_release_url dnf flat: amzn 2023 / 7.0 / aarch64" {
+  rprobe 'zbx_release_url flat rhel amzn 2023 2023 7.0 aarch64'
+  [ "$output" = "https://repo.zabbix.com/zabbix/7.0/amazonlinux/2023/aarch64/zabbix-release-latest-7.0.amzn2023.noarch.rpm" ]
+}
+
+@test "zbx_release_url dnf legacy: amzn 2023 / 7.4 uses noarch/" {
+  rprobe 'zbx_release_url legacy rhel amzn 2023 2023 7.4 x86_64'
+  [ "$output" = "https://repo.zabbix.com/zabbix/7.4/release/amazonlinux/2023/noarch/zabbix-release-latest-7.4.amzn2023.noarch.rpm" ]
 }
 
 # --- zypper (sles/leap) --------------------------------------------------------

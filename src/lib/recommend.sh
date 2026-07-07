@@ -432,7 +432,7 @@ plan_report_warnings() {
     _plan_warn "existing Zabbix detected — proceeding may conflict (repair/uninstall arrive in Phase 7)"
   fi
   # RHEL 8's native AppStream tops out at php:7.4; Zabbix 7.0/7.4 frontends
-  # need PHP >= 8.0.0 (verified live 2026-07-05 — see BUILD_REFERENCE.md).
+  # need PHP >= 8.0.0 (verified live 2026-07-05).
   # Warn at plan time; pkg.sh gives the same Remi hint if the install fails.
   if [[ "$DETECT_FAMILY" == "rhel" && "$DETECT_OS_MAJOR" == "8" ]] && plan_has frontend; then
     _plan_warn "RHEL 8's native PHP tops out at 7.4, but this frontend needs PHP >= 8.0.0 — install will fail unless a newer PHP (e.g. via the Remi repo) is already configured"

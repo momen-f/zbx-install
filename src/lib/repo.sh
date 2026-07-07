@@ -29,15 +29,23 @@ _repo_apt_url() {
     "$base" "$os_id" "$zv" "$os_id" "$os_ver"
 }
 
-# _repo_dnf_url LAYOUT OS_MAJOR ZBX_VERSION ARCH
+# _repo_dnf_url LAYOUT OS_ID OS_MAJOR ZBX_VERSION ARCH
+# Amazon Linux shares the rhel family/pkgmgr but has its own repo path segment
+# (amazonlinux/<ver>) and rpm dist suffix (.amzn<ver>) in place of rhel/.el<major>
+# (verified against repo.zabbix.com 2026-07 — 7.0 flat, 7.4 under release/).
 _repo_dnf_url() {
-  local layout="$1" major="$2" zv="$3" arch="$4"
+  local layout="$1" os_id="$2" major="$3" zv="$4" arch="$5"
+  local distro="rhel" sfx="el${major}"
+  if [[ "$os_id" == "amzn" ]]; then
+    distro="amazonlinux"
+    sfx="amzn${major}"
+  fi
   if [[ "$layout" == "legacy" ]]; then
-    printf 'https://repo.zabbix.com/zabbix/%s/release/rhel/%s/noarch/zabbix-release-latest-%s.el%s.noarch.rpm' \
-      "$zv" "$major" "$zv" "$major"
+    printf 'https://repo.zabbix.com/zabbix/%s/release/%s/%s/noarch/zabbix-release-latest-%s.%s.noarch.rpm' \
+      "$zv" "$distro" "$major" "$zv" "$sfx"
   else
-    printf 'https://repo.zabbix.com/zabbix/%s/rhel/%s/%s/zabbix-release-latest-%s.el%s.noarch.rpm' \
-      "$zv" "$major" "$arch" "$zv" "$major"
+    printf 'https://repo.zabbix.com/zabbix/%s/%s/%s/%s/zabbix-release-latest-%s.%s.noarch.rpm' \
+      "$zv" "$distro" "$major" "$arch" "$zv" "$sfx"
   fi
 }
 
@@ -61,7 +69,7 @@ zbx_release_url() {
   local layout="$1" family="$2" os_id="$3" os_ver="$4" major="$5" zv="$6" arch="$7"
   case "$family" in
     debian) _repo_apt_url "$layout" "$os_id" "$os_ver" "$zv" ;;
-    rhel) _repo_dnf_url "$layout" "$major" "$zv" "$arch" ;;
+    rhel) _repo_dnf_url "$layout" "$os_id" "$major" "$zv" "$arch" ;;
     suse) _repo_zypper_url "$layout" "$zv" "$arch" ;;
     *) return 1 ;;
   esac

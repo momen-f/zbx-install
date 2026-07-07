@@ -9,7 +9,7 @@
 #             per §14 (retry / view log / exit 5 — no skip, packages can never
 #             be skipped).
 #
-# EL8 note (verified live 2026-07-05, see BUILD_REFERENCE.md Phase 3 entry):
+# EL8 note (verified live 2026-07-05):
 # Zabbix 7.0/7.4 frontends now require PHP >= 8.0.0, but RHEL 8's own
 # AppStream tops out at php:7.4 — there is no native php:8.0+ stream, so
 # SPEC.md's assumed "dnf module enable php:8.0" (§15.2) would fail outright.
