@@ -600,11 +600,12 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
 }
 
-@test "Raspberry Pi OS + Zabbix 7.4 is rejected up front (no ARM 7.4 packages)" {
+@test "Raspberry Pi OS + Zabbix 7.4 is accepted (7.4 ships ARM packages via the raspbian /stable/ tree)" {
   fake uname 'echo armv7l'
   zx os-release.raspbian12 meminfo.4gb --dry-run --express --yes --zabbix-version 7.4
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"7.4 has no ARM packages"* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"7.4 (current stable)"* ]]
+  [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
 }
 
 @test "network guard: unattended without dry-run exits 4 when curl fails" {

@@ -551,14 +551,6 @@ prepare_plan() {
   if [[ "$PLAN_DB_ENGINE" == "sqlite3" ]] && ! plan_has proxy; then
     usage_err "--db sqlite3 (DB_ENGINE=sqlite3) is only valid for a proxy install (--proxy-only); a server plan needs mysql or pgsql"
   fi
-  # Zabbix 7.4 has no ARM packages in the raspbian repo — it publishes only the
-  # arch-independent zabbix-release for 7.4, no armhf/arm64 binaries (verified
-  # 2026-07). Hosts routed there (Raspberry Pi OS / Debian-on-arm, per
-  # _is_raspbian_repo_target — Ubuntu is NOT) can only run 7.0; reject 7.4 up
-  # front, not deep at the package step.
-  if [[ "$PLAN_ZBX_VERSION" == "7.4" ]] && _is_raspbian_repo_target "$DETECT_OS_ID" "$DETECT_ARCH"; then
-    usage_err "Zabbix 7.4 has no ARM packages for the Debian family (Raspberry Pi OS / Debian on ARM); only 7.0 is available on this platform. Re-run with --zabbix-version 7.0 (or ZBX_VERSION=7.0)."
-  fi
   resolve_update
   resolve_tz
   creds_collect

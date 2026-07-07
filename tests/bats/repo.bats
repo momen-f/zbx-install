@@ -44,6 +44,18 @@ rprobe() {
   [ "$output" = "https://repo.zabbix.com/zabbix/7.0/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.0+debian12_all.deb" ]
 }
 
+# 7.4 uses the legacy /release/ layout for the bootstrap deb (its ARM binaries
+# live under /7.4/stable/raspbian/, which zabbix-release then configures).
+@test "zbx_release_url apt legacy: Raspberry Pi OS (raspbian, armhf) + 7.4 -> raspbian /release/ bootstrap" {
+  rprobe 'zbx_release_url legacy debian raspbian 12 "" 7.4 armhf'
+  [ "$output" = "https://repo.zabbix.com/zabbix/7.4/release/raspbian/pool/main/z/zabbix-release/zabbix-release_latest_7.4+debian12_all.deb" ]
+}
+
+@test "zbx_release_url apt legacy: 64-bit Pi (debian, aarch64) + 7.4 -> raspbian /release/ bootstrap" {
+  rprobe 'zbx_release_url legacy debian debian 12 "" 7.4 aarch64'
+  [ "$output" = "https://repo.zabbix.com/zabbix/7.4/release/raspbian/pool/main/z/zabbix-release/zabbix-release_latest_7.4+debian12_all.deb" ]
+}
+
 # --- dnf (rhel-like) -----------------------------------------------------------
 @test "zbx_release_url dnf flat: rhel major 9 / 7.0 / x86_64" {
   rprobe 'zbx_release_url flat rhel rocky "" 9 7.0 x86_64'
