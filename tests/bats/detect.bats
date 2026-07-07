@@ -54,6 +54,11 @@ probe() {
   [ "$output" = "amzn 2023 rhel yes" ]
 }
 
+@test "raspberry pi os 12 (32-bit, raspbian) -> supported debian" {
+  probe os-release.raspbian12
+  [ "$output" = "raspbian 12 debian yes" ]
+}
+
 @test "opensuse leap 15.6 -> supported suse" {
   probe os-release.leap156
   [ "$output" = "opensuse-leap 15 suse yes" ]
@@ -87,20 +92,25 @@ probe() {
 }
 
 # --- pure helpers ------------------------------------------------------------
-@test "_arch_class classifies architectures" {
+@test "_arch_class classifies architectures (all ARM is repo-dependent 'maybe')" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
-    for a in x86_64 amd64 aarch64 arm64 armv7l; do _arch_class "$a"; done | paste -sd" " -'
-  [ "$output" = "yes yes maybe maybe no" ]
+    for a in x86_64 amd64 aarch64 arm64 armhf armv7l armv6l ppc64le; do _arch_class "$a"; done | paste -sd" " -'
+  [ "$output" = "yes yes maybe maybe maybe maybe maybe no" ]
 }
 
-@test "_arch_confirmed_for_os: amazon linux 2023 promotes arm, others do not" {
+@test "_arch_is_arm recognizes 32- and 64-bit ARM only" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
-    DETECT_OS_ID=amzn DETECT_OS_MAJOR=2023; _arch_confirmed_for_os && a=yes || a=no;
-    DETECT_OS_ID=amzn DETECT_OS_MAJOR=2;    _arch_confirmed_for_os && b=yes || b=no;
-    DETECT_OS_ID=rocky DETECT_OS_MAJOR=9;   _arch_confirmed_for_os && c=yes || c=no;
-    DETECT_OS_ID=ubuntu DETECT_OS_MAJOR=24; _arch_confirmed_for_os && d=yes || d=no;
-    echo "$a $b $c $d"'
-  [ "$output" = "yes no no no" ]
+    for a in aarch64 arm64 armhf armv7l armv6l x86_64 amd64 ppc64le; do
+      if _arch_is_arm "$a"; then echo -n "1"; else echo -n "0"; fi
+    done'
+  [ "$output" = "11111000" ]
+}
+
+@test "_arch_confirmed_for_os: amzn 2023, raspbian 12, debian 12 promote arm; others do not" {
+  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
+    chk() { DETECT_OS_ID="$1" DETECT_OS_MAJOR="$2"; if _arch_confirmed_for_os; then echo -n y; else echo -n n; fi; }
+    chk amzn 2023; chk amzn 2; chk raspbian 12; chk raspbian 11; chk debian 12; chk debian 13; chk ubuntu 24; chk rocky 9; echo'
+  [ "$output" = "ynynynnn" ]
 }
 
 @test "_osr_get strips quotes and preserves inner spaces" {

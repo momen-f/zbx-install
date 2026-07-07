@@ -20,13 +20,32 @@
 #   2. SPEC.md's SLES filename suffix was wrong: it's "sles15", not "sl15".
 
 # --- pure URL builders (bats-testable; no I/O) --------------------------------
-# _repo_apt_url LAYOUT OS_ID OS_VERSION ZBX_VERSION
+# _is_raspbian_repo_target OS_ID ARCH — true when Zabbix serves this Debian-
+# family host from the raspbian repo rather than debian/ubuntu: os_id=raspbian
+# (32-bit Raspberry Pi OS), or os_id=debian on ARM (64-bit Pi OS reports
+# ID=debian; Debian-on-arm generally). Zabbix ships all Debian-family ARM
+# packages (armhf + arm64) only under /raspbian/ — the /debian/ tree is
+# x86-only (verified 2026-07). Ubuntu keeps its own repo on every arch. The
+# 7.4-on-arm plan gate (main.sh) keys off the same predicate so it can't drift.
+_is_raspbian_repo_target() {
+  local os_id="$1" arch="$2"
+  [[ "$os_id" == "raspbian" ]] || { [[ "$os_id" == "debian" ]] && _arch_is_arm "$arch"; }
+}
+
+# _repo_apt_url LAYOUT OS_ID OS_VERSION ZBX_VERSION ARCH
+# raspbian-repo hosts (see above) use the /raspbian/ path with a +debian<ver>
+# bootstrap deb; everything else keeps its own os_id path + +<os_id><ver>.
 _repo_apt_url() {
-  local layout="$1" os_id="$2" os_ver="$3" zv="$4"
+  local layout="$1" os_id="$2" os_ver="$3" zv="$4" arch="$5"
   local base="https://repo.zabbix.com/zabbix/${zv}"
   [[ "$layout" == "legacy" ]] && base="${base}/release"
+  local path_id="$os_id" sfx_id="$os_id"
+  if _is_raspbian_repo_target "$os_id" "$arch"; then
+    path_id="raspbian"
+    sfx_id="debian"
+  fi
   printf '%s/%s/pool/main/z/zabbix-release/zabbix-release_latest_%s+%s%s_all.deb' \
-    "$base" "$os_id" "$zv" "$os_id" "$os_ver"
+    "$base" "$path_id" "$zv" "$sfx_id" "$os_ver"
 }
 
 # _repo_dnf_url LAYOUT OS_ID OS_MAJOR ZBX_VERSION ARCH
@@ -68,7 +87,7 @@ _repo_zypper_url() {
 zbx_release_url() {
   local layout="$1" family="$2" os_id="$3" os_ver="$4" major="$5" zv="$6" arch="$7"
   case "$family" in
-    debian) _repo_apt_url "$layout" "$os_id" "$os_ver" "$zv" ;;
+    debian) _repo_apt_url "$layout" "$os_id" "$os_ver" "$zv" "$arch" ;;
     rhel) _repo_dnf_url "$layout" "$os_id" "$major" "$zv" "$arch" ;;
     suse) _repo_zypper_url "$layout" "$zv" "$arch" ;;
     *) return 1 ;;
