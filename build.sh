@@ -33,6 +33,7 @@ ORDER=(
   lib/services.sh
   lib/health.sh
   lib/adminpass.sh
+  lib/os_macos.sh
   main.sh
 )
 

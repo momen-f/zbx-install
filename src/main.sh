@@ -41,6 +41,8 @@ source "$_SRC_DIR/lib/services.sh" # @dev-source
 source "$_SRC_DIR/lib/health.sh" # @dev-source
 # shellcheck source=lib/adminpass.sh
 source "$_SRC_DIR/lib/adminpass.sh" # @dev-source
+# @dev-source
+source "$_SRC_DIR/lib/os_macos.sh" # @dev-source
 
 # Version/date: injected by build.sh; fall back to the VERSION file in dev.
 main_version() {
