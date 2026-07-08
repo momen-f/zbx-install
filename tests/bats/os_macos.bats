@@ -20,22 +20,22 @@ mprobe() {
   [ "$output" = "no" ]
 }
 
-@test "zbx_macos_agent_url: arm64 openssl is the default variant" {
-  mprobe 'zbx_macos_agent_url 7.4.11 arm64'
-  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.4/7.4.11/zabbix_agent-7.4.11-macos-arm64-openssl.pkg" ]
+@test "zbx_macos_agent_url: 7.4 arm64 openssl (self-updating latest pointer, default)" {
+  mprobe 'zbx_macos_agent_url 7.4 arm64'
+  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.4/latest/zabbix_agent-7.4-latest-macos-arm64-openssl.pkg" ]
 }
 
-@test "zbx_macos_agent_url: amd64, no-encryption drops the suffix" {
-  mprobe 'zbx_macos_agent_url 7.4.11 amd64 none'
-  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.4/7.4.11/zabbix_agent-7.4.11-macos-amd64.pkg" ]
+@test "zbx_macos_agent_url: no-encryption drops the suffix" {
+  mprobe 'zbx_macos_agent_url 7.4 arm64 none'
+  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.4/latest/zabbix_agent-7.4-latest-macos-arm64.pkg" ]
 }
 
 @test "zbx_macos_agent_url: gnutls variant" {
-  mprobe 'zbx_macos_agent_url 7.4.11 arm64 gnutls'
-  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.4/7.4.11/zabbix_agent-7.4.11-macos-arm64-gnutls.pkg" ]
+  mprobe 'zbx_macos_agent_url 7.4 arm64 gnutls'
+  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.4/latest/zabbix_agent-7.4-latest-macos-arm64-gnutls.pkg" ]
 }
 
-@test "zbx_macos_agent_url: major is derived from the x.y.z release" {
-  mprobe 'zbx_macos_agent_url 7.0.16 amd64 openssl'
-  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/7.0.16/zabbix_agent-7.0.16-macos-amd64-openssl.pkg" ]
+@test "zbx_macos_agent_url: 7.0 LTS also offers the arm64 latest pkg" {
+  mprobe 'zbx_macos_agent_url 7.0 arm64 openssl'
+  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/latest/zabbix_agent-7.0-latest-macos-arm64-openssl.pkg" ]
 }

@@ -5,10 +5,13 @@
 # download/install/launchd/health flow build on it.
 #
 # Verified against cdn.zabbix.com + an expanded .pkg (2026-07):
-#   - URL:  https://cdn.zabbix.com/zabbix/binaries/stable/<major>/<release>/
-#           zabbix_agent-<release>-macos-<arch>[-openssl|-gnutls].pkg
-#   - arch: arm64 (Apple Silicon) and amd64 (Intel); .pkg for 7.4 (7.0 is
-#           archive-only on arm64), resolved at run time by a HEAD probe.
+#   - The CDN publishes a self-updating "latest" pointer per major, mirroring
+#     the Linux zabbix-release-latest idea:
+#       https://cdn.zabbix.com/zabbix/binaries/stable/<major>/latest/
+#         zabbix_agent-<major>-latest-macos-arm64[-openssl|-gnutls].pkg
+#   - The .pkg is ARM64-ONLY: Zabbix ships no macOS amd64 .pkg (Intel macOS is
+#     tar.gz-archive-only), so this path supports Apple Silicon. Both 7.0 and
+#     7.4 offer the arm64 .pkg.
 #   - the .pkg installs: /usr/local/sbin/zabbix_agentd,
 #     /usr/local/etc/zabbix/zabbix_agentd.conf (ships as .conf.NEW),
 #     /Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist; agent port 10050.
@@ -25,17 +28,18 @@ _macos_arch() {
   esac
 }
 
-# zbx_macos_agent_url RELEASE ARCH [ENC] — pure: the .pkg URL for a full
-# x.y.z RELEASE and a Zabbix macOS ARCH token (arm64|amd64). ENC is the TLS
-# backend: openssl (default), gnutls, or none (no suffix).
+# zbx_macos_agent_url MAJOR ARCH [ENC] — pure: the self-updating "latest" .pkg
+# URL for a MAJOR (e.g. 7.4) and a Zabbix macOS ARCH token. Zabbix only builds
+# the macOS .pkg for arm64. ENC is the TLS backend: openssl (default), gnutls,
+# or none (no suffix).
 zbx_macos_agent_url() {
-  local release="$1" arch="$2" enc="${3:-openssl}"
-  local major="${release%.*}" encsfx=""
+  local major="$1" arch="$2" enc="${3:-openssl}"
+  local encsfx=""
   case "$enc" in
     openssl) encsfx="-openssl" ;;
     gnutls) encsfx="-gnutls" ;;
     none | "") encsfx="" ;;
   esac
-  printf '%s/%s/%s/zabbix_agent-%s-macos-%s%s.pkg' \
-    "$ZBX_MACOS_CDN" "$major" "$release" "$release" "$arch" "$encsfx"
+  printf '%s/%s/latest/zabbix_agent-%s-latest-macos-%s%s.pkg' \
+    "$ZBX_MACOS_CDN" "$major" "$major" "$arch" "$encsfx"
 }
