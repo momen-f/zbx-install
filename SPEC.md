@@ -53,6 +53,7 @@
 | Amazon Linux | `amzn` | 2023 | dnf | RHEL family; full server on `x86_64` + `aarch64` (packages verified 2026-07) |
 | SUSE | `sles`, `opensuse-leap` | SLES 15 SP5+, Leap 15.6 | zypper | SLES frontend needs Web & Scripting module — see §15 |
 | Raspberry Pi OS | `raspbian` (32-bit) · `debian` (64-bit) | 12 (bookworm), Zabbix 7.0 + 7.4 | apt | Debian family; full server on `armhf` + `arm64` via Zabbix's raspbian repo. 64-bit Pi OS reports `ID=debian` — routed by arch. |
+| macOS (agent only) | `macos` (Darwin, by `uname`) | any recent, **arm64 only** | .pkg | **Agent only** — Zabbix ships no macOS server/proxy. Installs the signed `zabbix_agentd` .pkg from cdn.zabbix.com + a launchd daemon. Needs bash ≥ 4 (macOS ships 3.2) — the one-liner uses Homebrew's; Intel Macs are unsupported (.pkg is arm64-only). |
 
 Match on `ID` first, fall back to `ID_LIKE`. Architecture: `x86_64` fully supported; `aarch64` only where Zabbix publishes packages for that distro (*verify at build time*), otherwise print a clear unsupported message. Confirmed available for Amazon Linux 2023 (`aarch64`) and Raspberry Pi OS 12 / 7.0 (`arm64`, `armhf`).
 

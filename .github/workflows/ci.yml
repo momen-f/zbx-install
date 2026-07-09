@@ -334,3 +334,42 @@ jobs:
             grep -q "ci-proxy" /tmp/install.out
             grep -q "must be registered as a matching Proxy object" /tmp/install.out
           '
+
+  # macOS agent acceptance (§4): a REAL install of the signed zabbix_agentd .pkg
+  # on a genuine Apple-Silicon runner — the end-to-end verification the ARM
+  # Linux paths can't get. macOS ships bash 3.2, so build+run under Homebrew's
+  # bash; the install needs root for installer(8) + a system LaunchDaemon.
+  macos-agent:
+    runs-on: macos-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Modern bash + build the bundle
+        run: |
+          brew install bash >/dev/null || brew list bash >/dev/null
+          echo "BASH_BIN=$(brew --prefix)/bin/bash" >>"$GITHUB_ENV"
+          "$(brew --prefix)/bin/bash" --version | head -1
+          "$(brew --prefix)/bin/bash" ./build.sh
+
+      - name: Real agent install (downloads + installs the signed .pkg)
+        run: sudo "$BASH_BIN" dist/zbx-install.sh --express --yes --no-color | tee /tmp/install.out
+
+      - name: Verify the agent installed and is listening on 10050
+        run: |
+          echo "=== binary + config from the .pkg ==="
+          test -x /usr/local/sbin/zabbix_agentd
+          test -f /usr/local/etc/zabbix/zabbix_agentd.conf
+          echo "=== LaunchDaemon loaded ==="
+          sudo launchctl print system/com.zabbix.zabbix_agentd >/dev/null 2>&1 ||
+            sudo launchctl list | grep -q zabbix
+          echo "=== agent listening on 10050 ==="
+          ok=0
+          for _ in $(seq 1 15); do
+            if sudo lsof -nP -iTCP:10050 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; then ok=1; break; fi
+            sleep 1
+          done
+          sudo lsof -nP -iTCP:10050 -sTCP:LISTEN || true
+          test "$ok" = "1"
+          echo "=== installer reported success ==="
+          grep -q "Plan (macOS agent)" /tmp/install.out

@@ -55,6 +55,7 @@ or see [SPEC.md](SPEC.md) §7 (CLI) and Appendix A (`--config` file format).
 | Amazon Linux | 2023 | dnf |
 | SUSE (SLES, openSUSE Leap) | SLES 15 SP5+, Leap 15.6 | zypper |
 | Raspberry Pi OS (32- & 64-bit) | 12 (bookworm) | apt |
+| macOS (Apple Silicon) | agent only (7.0 / 7.4) | .pkg |
 
 Offers Zabbix `7.0` (LTS, default) and `7.4` (current stable). Full detail
 in [SPEC.md](SPEC.md) §4.

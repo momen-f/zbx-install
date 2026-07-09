@@ -68,4 +68,17 @@ else
 fi
 
 chmod +x "$tmp/zbx-install.sh"
-exec bash "$tmp/zbx-install.sh" ${args[@]+"${args[@]}"}
+
+# The installer proper needs bash >= 4 (§3). macOS ships 3.2 at /bin/bash, so if
+# this bootstrap is running under an old bash, hand off to a newer one (Homebrew
+# installs one); otherwise let the bundle's own version guard print guidance.
+sh_bin="bash"
+if [[ "${BASH_VERSINFO:-0}" -lt 4 ]]; then
+  for cand in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x "$cand" ]]; then
+      sh_bin="$cand"
+      break
+    fi
+  done
+fi
+exec "$sh_bin" "$tmp/zbx-install.sh" ${args[@]+"${args[@]}"}

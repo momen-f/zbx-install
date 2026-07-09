@@ -13,6 +13,16 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Modern bash required (associative arrays et al.; §3 targets 4.2+). This runs
+# before the first 4.x-only construct below, so an old bash fails here with
+# guidance instead of a cryptic "declare: -A: invalid option". macOS ships bash
+# 3.2 at /bin/bash — the agent install needs a newer one (e.g. Homebrew's).
+if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
+  printf 'zbx-install requires bash 4.2 or newer (found %s).\n' "${BASH_VERSION:-unknown}" >&2
+  printf 'On macOS: install a newer bash (brew install bash) and run it with that.\n' >&2
+  exit 3
+fi
+
 # --- shared globals (main.sh may override before the pipeline runs) ----------
 : "${DRY_RUN:=0}"      # 1 = print commands, execute nothing
 : "${UNATTENDED:=0}"   # 1 = no prompts; failures call die() with a code
