@@ -55,10 +55,14 @@ readonly ZBX_MACOS_AGENT_LABEL="com.zabbix.zabbix_agentd"
 # ID signature (verified to be Zabbix's), not a hash: the self-updating
 # "latest" build has no stable checksum to pin.
 macos_agent_install() {
-  local url pkg
+  local url pkg base
   url="$(zbx_macos_agent_url "$PLAN_ZBX_VERSION" arm64 openssl)"
-  pkg="$(mktemp -t zbx-macos-agent 2>/dev/null || echo /tmp/zbx-macos-agent.pkg)"
-  ZBX_TEMPFILES+=("$pkg")
+  # installer(8) validates the extension and rejects a path not ending in
+  # .pkg ("package path specified was invalid"); BSD mktemp can't add a suffix,
+  # so append one. Register both the bare temp file and the .pkg for cleanup.
+  base="$(mktemp -t zbx-macos-agent 2>/dev/null || echo "/tmp/zbx-macos-agent.$$")"
+  pkg="${base}.pkg"
+  ZBX_TEMPFILES+=("$base" "$pkg")
   log INFO "macOS agent package: $url"
   run curl -fsSL -o "$pkg" "$url" || return 1
   if [[ "$DRY_RUN" != "1" ]]; then
