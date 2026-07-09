@@ -54,6 +54,19 @@ _osr_get() {
 }
 
 detect_os() {
+  # macOS has no /etc/os-release; identify it by uname. ZBX_UNAME_S is an
+  # override so the Linux fixture tests stay deterministic when the suite runs
+  # on a Mac (matching the OS_RELEASE_FILE/MEMINFO_FILE test-seam pattern).
+  local sys="${ZBX_UNAME_S:-$(uname -s 2>/dev/null || true)}"
+  if [[ "$sys" == "Darwin" ]]; then
+    DETECT_OS_ID="macos"
+    DETECT_OS_LIKE="darwin"
+    DETECT_OS_VERSION="$(sw_vers -productVersion 2>/dev/null || true)"
+    DETECT_OS_MAJOR="${DETECT_OS_VERSION%%.*}"
+    [[ -n "$DETECT_OS_MAJOR" ]] || DETECT_OS_MAJOR="0"
+    DETECT_OS_NAME="macOS ${DETECT_OS_VERSION}"
+    return 0
+  fi
   local f="${OS_RELEASE_FILE:-/etc/os-release}"
   if [[ ! -r "$f" ]]; then
     DETECT_OS_ID="unknown"
@@ -82,6 +95,7 @@ detect_family() {
     debian | ubuntu | raspbian) DETECT_FAMILY="debian" ;;
     rhel | centos | rocky | almalinux | ol | amzn | fedora) DETECT_FAMILY="rhel" ;;
     sles | opensuse-leap | opensuse | sled) DETECT_FAMILY="suse" ;;
+    macos) DETECT_FAMILY="macos" ;;
     *) DETECT_FAMILY="$(_family_from_like)" ;;
   esac
 }
@@ -100,6 +114,7 @@ detect_supported() {
     raspbian) [[ "$m" == 12 ]] && DETECT_SUPPORTED="yes" ;; # 32-bit Raspberry Pi OS; 64-bit reports debian (handled above)
     sles) [[ "$m" == 15 && "$minor" -ge 5 ]] && DETECT_SUPPORTED="yes" ;;
     opensuse-leap) [[ "$v" == 15.6 ]] && DETECT_SUPPORTED="yes" ;;
+    macos) DETECT_SUPPORTED="yes" ;; # agent-only; any recent macOS (arch gate handles Intel, §4)
   esac
   return 0
 }
@@ -167,7 +182,16 @@ _arch_confirmed_for_os() {
 }
 
 detect_arch() {
-  DETECT_ARCH="$(uname -m)"
+  DETECT_ARCH="${ZBX_UNAME_M:-$(uname -m)}"
+  # macOS: Zabbix ships the agent .pkg for arm64 only (Intel is tar.gz-archive-
+  # only, §4) — so arm64 is supported, everything else is not.
+  if [[ "$DETECT_OS_ID" == "macos" ]]; then
+    case "$DETECT_ARCH" in
+      arm64) DETECT_ARCH_OK="yes" ;;
+      *) DETECT_ARCH_OK="no" ;;
+    esac
+    return 0
+  fi
   DETECT_ARCH_OK="$(_arch_class "$DETECT_ARCH")"
   # §15.10: on the verified combos, aarch64/arm64 is first-class rather than
   # a repo-probe gamble.
@@ -318,16 +342,24 @@ detect_run() {
   detect_os || true
   detect_family
   detect_supported
-  detect_pkgmgr
   detect_arch
-  detect_hw
-  detect_disk
-  detect_network
-  detect_existing
-  detect_selinux
-  detect_firewall
-  detect_ports
-  detect_virt
+  if [[ "$DETECT_OS_ID" == "macos" ]]; then
+    # macOS is agent-only: the classic zabbix_agentd from a signed .pkg, no
+    # apt/dnf/systemd/SELinux/firewalld. Skip the Linux-only probes and leave
+    # their DETECT_* fields at their initialized defaults.
+    DETECT_PKGMGR="pkg"
+    DETECT_PKGMGR_OK="yes"
+  else
+    detect_pkgmgr
+    detect_hw
+    detect_disk
+    detect_network
+    detect_existing
+    detect_selinux
+    detect_firewall
+    detect_ports
+    detect_virt
+  fi
   # DETECT_NET_OK stays writable: the network error menu offers "retry", which
   # re-runs detect_network (§8, §14).
   readonly DETECT_OS_ID DETECT_OS_LIKE DETECT_OS_VERSION DETECT_OS_MAJOR \

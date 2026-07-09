@@ -63,7 +63,7 @@ zx() {
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" DETECT_SKIP_NET=1 \
     ZBX_ETC_DIR="$ETCDIR" STATE_FILE="${STATEFILE:-$BATS_TEST_TMPDIR/state}" \
-    ZBX_HEALTH_PORT_TRIES=1 \
+    ZBX_HEALTH_PORT_TRIES=1 ZBX_UNAME_S=Linux \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -79,7 +79,7 @@ zxn() {
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     OS_RELEASE_FILE="$FIX/$osr" MEMINFO_FILE="$FIX/$mem" \
     ZBX_ETC_DIR="$ETCDIR" STATE_FILE="${STATEFILE:-$BATS_TEST_TMPDIR/state}" \
-    ZBX_HEALTH_PORT_TRIES=1 \
+    ZBX_HEALTH_PORT_TRIES=1 ZBX_UNAME_S=Linux \
     "$BASH_BIN" "$DIST" --no-color --log-file "$BATS_TEST_TMPDIR/zbx.log" "$@"
 }
 
@@ -461,7 +461,7 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   local rcfile="$BATS_TEST_TMPDIR/rc"
   setsid bash -c '
     env -i PATH="'"$TOOLDIR"'" OS_RELEASE_FILE="'"$FIX"'/os-release.ubuntu2404" \
-      MEMINFO_FILE="'"$FIX"'/meminfo.4gb" DETECT_SKIP_NET=1 \
+      MEMINFO_FILE="'"$FIX"'/meminfo.4gb" DETECT_SKIP_NET=1 ZBX_UNAME_S=Linux \
       "'"$BASH_BIN"'" "'"$DIST"'" --yes --dry-run --no-color \
       --log-file "'"$BATS_TEST_TMPDIR"'/zbx-headless.log" \
       >"'"$BATS_TEST_TMPDIR"'/out" 2>&1 </dev/null

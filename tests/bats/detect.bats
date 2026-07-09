@@ -10,9 +10,11 @@ DETECT="${BATS_TEST_DIRNAME}/../../src/lib/detect.sh"
 FIX="${BATS_TEST_DIRNAME}/../fixtures"
 
 # probe FIXTURE — sets $output to "ID MAJOR FAMILY SUPPORTED".
+# ZBX_UNAME_S=Linux keeps detect_os on the os-release path even when the suite
+# runs on a Mac (where `uname -s` is Darwin).
 probe() {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
-    OS_RELEASE_FILE="'"$FIX"'/'"$1"'";
+    ZBX_UNAME_S=Linux OS_RELEASE_FILE="'"$FIX"'/'"$1"'";
     detect_os; detect_family; detect_supported;
     printf "%s %s %s %s\n" "$DETECT_OS_ID" "$DETECT_OS_MAJOR" "$DETECT_FAMILY" "$DETECT_SUPPORTED"'
 }
@@ -57,6 +59,22 @@ probe() {
 @test "raspberry pi os 12 (32-bit, raspbian) -> supported debian" {
   probe os-release.raspbian12
   [ "$output" = "raspbian 12 debian yes" ]
+}
+
+@test "macOS (Darwin) -> macos family, supported (agent-only, no os-release)" {
+  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
+    ZBX_UNAME_S=Darwin; detect_os; detect_family; detect_supported;
+    printf "%s %s %s\n" "$DETECT_OS_ID" "$DETECT_FAMILY" "$DETECT_SUPPORTED"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "macos macos yes" ]
+}
+
+@test "detect_arch on macOS: arm64 is supported, Intel x86_64 is not (.pkg is arm64-only)" {
+  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
+    DETECT_OS_ID=macos ZBX_UNAME_M=arm64;  detect_arch; a="$DETECT_ARCH_OK";
+    DETECT_OS_ID=macos ZBX_UNAME_M=x86_64; detect_arch; b="$DETECT_ARCH_OK";
+    echo "$a $b"'
+  [ "$output" = "yes no" ]
 }
 
 @test "opensuse leap 15.6 -> supported suse" {
@@ -128,7 +146,7 @@ probe() {
 
 @test "missing os-release file -> unknown, non-fatal" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
-    OS_RELEASE_FILE="/nonexistent/os-release"; detect_os || true;
+    ZBX_UNAME_S=Linux OS_RELEASE_FILE="/nonexistent/os-release"; detect_os || true;
     detect_family; printf "%s %s\n" "$DETECT_OS_ID" "$DETECT_FAMILY"'
   [ "$status" -eq 0 ]
   [ "$output" = "unknown unknown" ]
