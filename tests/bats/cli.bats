@@ -608,6 +608,30 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
 }
 
+# macOS (Darwin) routes to the agent-only pipeline, not the Linux one. Forced
+# via ZBX_UNAME_S/ZBX_UNAME_M so it's deterministic on both a Mac and Linux CI.
+@test "macOS (Darwin, arm64): express dry-run routes to the agent install and exits 0" {
+  run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
+    ZBX_UNAME_S=Darwin ZBX_UNAME_M=arm64 DETECT_SKIP_NET=1 \
+    ZBX_ETC_DIR="$ETCDIR" STATE_FILE="$BATS_TEST_TMPDIR/state" ZBX_HEALTH_PORT_TRIES=1 \
+    "$BASH_BIN" "$DIST" --express --yes --dry-run --no-color \
+    --log-file "$BATS_TEST_TMPDIR/zbx-macos.log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Plan (macOS agent)"* ]]
+  [[ "$output" == *"cdn.zabbix.com"* ]]
+  [[ "$output" == *"+ installer"* ]]
+}
+
+@test "macOS on Intel (x86_64) is rejected — Zabbix ships no macOS amd64 .pkg" {
+  run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
+    ZBX_UNAME_S=Darwin ZBX_UNAME_M=x86_64 DETECT_SKIP_NET=1 \
+    ZBX_ETC_DIR="$ETCDIR" STATE_FILE="$BATS_TEST_TMPDIR/state" \
+    "$BASH_BIN" "$DIST" --express --yes --dry-run --no-color \
+    --log-file "$BATS_TEST_TMPDIR/zbx-macos-intel.log"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"unsupported architecture: x86_64"* ]]
+}
+
 @test "network guard: unattended without dry-run exits 4 when curl fails" {
   fake curl 'exit 1'
   zxn os-release.ubuntu2404 meminfo.4gb --express --yes

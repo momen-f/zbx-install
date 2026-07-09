@@ -4,10 +4,20 @@
 # `bash -c` subshell (see redact.bats for why).
 
 CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
+CONFIG="${BATS_TEST_DIRNAME}/../../src/lib/config.sh"
+HEALTH="${BATS_TEST_DIRNAME}/../../src/lib/health.sh"
 MACOS="${BATS_TEST_DIRNAME}/../../src/lib/os_macos.sh"
 
 mprobe() {
   run bash -c 'source "'"$CORE"'"; source "'"$MACOS"'"; '"$1"
+}
+
+# dprobe SNIPPET — sources the modules the macOS execute path touches, with
+# DRY_RUN=1 and a throwaway LOG_FILE, then runs SNIPPET. run() prints "  + cmd"
+# to stdout under DRY_RUN, so $output carries the commands that would run.
+dprobe() {
+  run bash -c 'source "'"$CORE"'"; source "'"$CONFIG"'"; source "'"$HEALTH"'"; source "'"$MACOS"'";
+    DRY_RUN=1 LOG_FILE="$(mktemp)"; '"$1"
 }
 
 @test "_macos_arch maps uname arch to Zabbix macOS tokens" {
@@ -38,4 +48,25 @@ mprobe() {
 @test "zbx_macos_agent_url: 7.0 LTS also offers the arm64 latest pkg" {
   mprobe 'zbx_macos_agent_url 7.0 arm64 openssl'
   [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/latest/zabbix_agent-7.0-latest-macos-arm64-openssl.pkg" ]
+}
+
+# --- execute path (dry-run) ---------------------------------------------------
+@test "macos_agent_install (dry-run) fetches the arm64 latest .pkg and runs installer" {
+  dprobe 'PLAN_ZBX_VERSION=7.4; macos_agent_install'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cdn.zabbix.com/zabbix/binaries/stable/7.4/latest/zabbix_agent-7.4-latest-macos-arm64-openssl.pkg"* ]]
+  # run() prints each arg on its own line (global IFS=$'\n\t'), so match the
+  # command token, not "installer -pkg".
+  [[ "$output" == *"+ installer"* ]]
+}
+
+@test "macos_agent_config (dry-run) points the agent at the server, writes nothing" {
+  dprobe 'PLAN_ZBX_SERVER_IP=192.0.2.10; macos_agent_config'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Server/ServerActive=192.0.2.10"* ]]
+}
+
+@test "macos_agent_run (dry-run) completes install -> config -> service -> health" {
+  dprobe 'PLAN_ZBX_VERSION=7.4 PLAN_ZBX_SERVER_IP=192.0.2.10; macos_agent_run'
+  [ "$status" -eq 0 ]
 }

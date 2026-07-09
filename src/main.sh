@@ -704,6 +704,33 @@ uninstall_run() {
   log INFO "uninstall complete"
 }
 
+# macos_main_flow — macOS is agent-only (Zabbix ships no macOS server/proxy):
+# a self-contained install of the signed zabbix_agentd .pkg pointed at the
+# user's server. Used in place of the Linux recommend_run/main_flow for
+# DETECT_OS_ID=macos; guard_arch has already rejected non-arm64 Macs.
+macos_main_flow() {
+  if [[ "$MODE" == "proxy-only" ]]; then
+    usage_err "Zabbix ships no macOS server or proxy — macOS installs the agent only; re-run without --proxy-only"
+  fi
+  PLAN_ZBX_VERSION="${OPT_ZBX_VERSION:-$ZBX_DEFAULT_VERSION}"
+  PLAN_ZBX_SERVER_IP="${OPT_SERVER_IP:-127.0.0.1}"
+  agent_params
+  printf '\n%sPlan (macOS agent)%s\n' "$C_BOLD" "$C_RESET"
+  ui_row "OS:" "${DETECT_OS_NAME} (${DETECT_ARCH})"
+  ui_row "Install:" "Zabbix agent ${PLAN_ZBX_VERSION} — zabbix_agentd (signed .pkg)"
+  ui_row "Reports to:" "$PLAN_ZBX_SERVER_IP"
+  [[ "$DRY_RUN" == "1" ]] && ui_row "Mode:" "dry-run (no changes made)"
+  plan_confirm || {
+    log INFO "macOS agent plan rejected"
+    return 0
+  }
+  log INFO "macOS agent plan confirmed (version=$PLAN_ZBX_VERSION, server=$PLAN_ZBX_SERVER_IP)"
+  local rc
+  macos_agent_run && rc=0 || rc=$?
+  health_print_summary
+  return "$rc"
+}
+
 main_flow() {
   local m rc
   while true; do
@@ -770,6 +797,12 @@ main() {
   detect_report
   guard_supported
   guard_arch
+  if [[ "$DETECT_OS_ID" == "macos" ]]; then
+    # macOS is agent-only and skips the Linux-oriented existing/network guards
+    # and the recommendation engine (§4); guard_arch already gated non-arm64.
+    macos_main_flow
+    exit $?
+  fi
   guard_existing
   guard_network
   recommend_run

@@ -43,3 +43,82 @@ zbx_macos_agent_url() {
   printf '%s/%s/latest/zabbix_agent-%s-latest-macos-%s%s.pkg' \
     "$ZBX_MACOS_CDN" "$major" "$major" "$arch" "$encsfx"
 }
+
+# Paths the .pkg installs (verified by expanding it). The conf path is an
+# overridable test seam, matching ZBX_ETC_DIR on the Linux side.
+: "${ZBX_MACOS_AGENT_CONF:=/usr/local/etc/zabbix/zabbix_agentd.conf}"
+: "${ZBX_MACOS_AGENT_PLIST:=/Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist}"
+readonly ZBX_MACOS_AGENT_LABEL="com.zabbix.zabbix_agentd"
+
+# macos_agent_install — download the signed .pkg and install it. run() makes
+# every system command DRY_RUN-aware. Integrity is the .pkg's Apple Developer
+# ID signature (verified to be Zabbix's), not a hash: the self-updating
+# "latest" build has no stable checksum to pin.
+macos_agent_install() {
+  local url pkg
+  url="$(zbx_macos_agent_url "$PLAN_ZBX_VERSION" arm64 openssl)"
+  pkg="$(mktemp -t zbx-macos-agent 2>/dev/null || echo /tmp/zbx-macos-agent.pkg)"
+  ZBX_TEMPFILES+=("$pkg")
+  log INFO "macOS agent package: $url"
+  run curl -fsSL -o "$pkg" "$url" || return 1
+  if [[ "$DRY_RUN" != "1" ]]; then
+    if ! pkgutil --check-signature "$pkg" 2>/dev/null | grep -qi 'zabbix'; then
+      log ERROR "macOS agent package is not signed by Zabbix — refusing to install"
+      return 1
+    fi
+  fi
+  run installer -pkg "$pkg" -target / || return 1
+}
+
+# macos_agent_config — point the agent at its server. The .pkg seeds
+# zabbix_agentd.conf.NEW on a fresh install; promote it, then set the keys.
+macos_agent_config() {
+  local conf="$ZBX_MACOS_AGENT_CONF" hn
+  hn="$(hostname 2>/dev/null || echo zabbix-agent)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '  + configure %s (Server/ServerActive=%s, Hostname=%s)\n' \
+      "$conf" "$PLAN_ZBX_SERVER_IP" "$hn"
+    return 0
+  fi
+  if [[ ! -f "$conf" && -f "${conf}.NEW" ]]; then
+    cp "${conf}.NEW" "$conf" || return 1
+  fi
+  set_conf "$conf" Server "$PLAN_ZBX_SERVER_IP" || return 1
+  set_conf "$conf" ServerActive "$PLAN_ZBX_SERVER_IP" || return 1
+  set_conf "$conf" Hostname "$hn" || return 1
+}
+
+# macos_agent_service — load + enable the LaunchDaemon the .pkg installed
+# (the .pkg postinstall may already have; bootstrap-then-load is idempotent
+# enough, and macos_agent_health is the real gate).
+macos_agent_service() {
+  run launchctl bootstrap system "$ZBX_MACOS_AGENT_PLIST" ||
+    run launchctl load -w "$ZBX_MACOS_AGENT_PLIST" || true
+}
+
+# macos_agent_health — confirm the agent is listening on 10050. macOS has no
+# ss; use lsof. Polls like health.sh's Linux port check (§13).
+macos_agent_health() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    _health_record "agent (port 10050)" 0 ""
+    return 0
+  fi
+  local tries="${ZBX_HEALTH_PORT_TRIES:-15}" i
+  for ((i = 1; i <= tries; i++)); do
+    if lsof -nP -iTCP:10050 -sTCP:LISTEN >/dev/null 2>&1; then
+      _health_record "agent (port 10050)" 0 ""
+      return 0
+    fi
+    ((i < tries)) && sleep 1
+  done
+  _health_record "agent (port 10050)" 1 "launchctl print system/${ZBX_MACOS_AGENT_LABEL}"
+}
+
+# macos_agent_run — the macOS analog of run_pipeline: install → configure →
+# start → health. main() routes here for DETECT_OS_ID=macos.
+macos_agent_run() {
+  macos_agent_install || return 1
+  macos_agent_config || return 1
+  macos_agent_service
+  macos_agent_health
+}
