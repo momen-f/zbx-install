@@ -115,10 +115,13 @@ macos_agent_health() {
 }
 
 # macos_agent_run — the macOS analog of run_pipeline: install → configure →
-# start → health. main() routes here for DETECT_OS_ID=macos.
+# start → health. Fails LOUD (die, exit 5) if the install/config step fails —
+# never falls through to a health summary on an install that never happened.
+# The health result is recorded (not propagated); macos_main_flow reads the
+# summary to decide the exit code.
 macos_agent_run() {
-  macos_agent_install || return 1
-  macos_agent_config || return 1
+  macos_agent_install || die "macOS agent download/install failed — see ${LOG_FILE}" 5
+  macos_agent_config || die "configuring the macOS agent failed — see ${LOG_FILE}" 5
   macos_agent_service
-  macos_agent_health
+  macos_agent_health || true
 }

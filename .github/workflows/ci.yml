@@ -353,7 +353,13 @@ jobs:
           "$(brew --prefix)/bin/bash" ./build.sh
 
       - name: Real agent install (downloads + installs the signed .pkg)
-        run: sudo "$BASH_BIN" dist/zbx-install.sh --express --yes --no-color | tee /tmp/install.out
+        run: |
+          set -o pipefail
+          if ! sudo "$BASH_BIN" dist/zbx-install.sh --express --yes --no-color | tee /tmp/install.out; then
+            echo "=== installer log (run() command output lands here, not stdout) ==="
+            sudo cat /var/log/zbx-install-*.log 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Verify the agent installed and is listening on 10050
         run: |

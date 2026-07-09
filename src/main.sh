@@ -725,10 +725,12 @@ macos_main_flow() {
     return 0
   }
   log INFO "macOS agent plan confirmed (version=$PLAN_ZBX_VERSION, server=$PLAN_ZBX_SERVER_IP)"
-  local rc
-  macos_agent_run && rc=0 || rc=$?
-  health_print_summary
-  return "$rc"
+  # macos_agent_run die()s (exit 5) on an install/config failure, so we only
+  # reach the summary when the agent actually installed — no false "all passed"
+  # on an empty result set. The health summary drives the exit code (6 on a
+  # failed check, e.g. the agent never started listening).
+  macos_agent_run
+  if health_print_summary; then return 0; else return 6; fi
 }
 
 main_flow() {
@@ -800,8 +802,11 @@ main() {
   if [[ "$DETECT_OS_ID" == "macos" ]]; then
     # macOS is agent-only and skips the Linux-oriented existing/network guards
     # and the recommendation engine (§4); guard_arch already gated non-arm64.
-    macos_main_flow
-    exit $?
+    # Capture the return so a non-zero (health-failed) exit is clean, not an
+    # errexit ERR-trap abort on the bare call.
+    local mac_rc=0
+    macos_main_flow || mac_rc=$?
+    exit "$mac_rc"
   fi
   guard_existing
   guard_network
