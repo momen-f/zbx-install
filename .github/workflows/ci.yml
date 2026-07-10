@@ -389,3 +389,17 @@ jobs:
           ! test -f /Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist
           echo "=== no longer listening on 10050 ==="
           ! (sudo lsof -nP -iTCP:10050 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN)
+
+      # GitHub retired its Intel macOS runners, so the Intel (x86_64) tar.gz
+      # path can't be really installed in CI. Two proxies stand in: a dry-run
+      # asserting the routing/URL, and a HEAD probe of the actual tar.gz on
+      # the CDN so a silent upstream renaming fails the build loudly.
+      - name: Intel (x86_64) tar.gz path — dry-run routing + CDN liveness probe
+        run: |
+          ZBX_UNAME_M=x86_64 "$BASH_BIN" dist/zbx-install.sh \
+            --express --yes --dry-run --no-color | tee /tmp/intel-dryrun.out
+          grep -q "tar.gz archive" /tmp/intel-dryrun.out
+          url="$(grep -o 'https://cdn.zabbix.com[^ ]*macos-amd64[^ ]*\.tar\.gz' /tmp/intel-dryrun.out | head -1)"
+          test -n "$url"
+          echo "=== probing $url ==="
+          curl -fsIL "$url" >/dev/null

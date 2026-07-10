@@ -167,11 +167,11 @@ _arch_confirmed_for_os() {
 
 detect_arch() {
   DETECT_ARCH="${ZBX_UNAME_M:-$(uname -m)}"
-  # macOS: Zabbix ships the agent .pkg for arm64 only (Intel is tar.gz-archive-
-  # only, §4) — so arm64 is supported, everything else is not.
+  # macOS: Apple Silicon gets the signed .pkg, Intel gets the tar.gz archive
+  # (§4) — both supported; anything else Zabbix does not build for.
   if [[ "$DETECT_OS_ID" == "macos" ]]; then
     case "$DETECT_ARCH" in
-      arm64) DETECT_ARCH_OK="yes" ;;
+      arm64 | x86_64) DETECT_ARCH_OK="yes" ;;
       *) DETECT_ARCH_OK="no" ;;
     esac
     return 0
