@@ -6,6 +6,7 @@
 setup() {
   INSTALL="${BATS_TEST_DIRNAME}/../../install.sh"
   BASH_BIN="$(command -v bash)"
+  REAL_SHA256SUM="$(command -v sha256sum)"
   TOOLDIR="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$TOOLDIR"
   local t src
@@ -75,7 +76,9 @@ case "$out" in
     if [[ "'"$mode"'" == bad ]]; then
       printf "0000000000000000000000000000000000000000000000000000000000000000  zbx-install.sh\n" >"$out"
     else
-      (cd "$(dirname "$out")" && sha256sum zbx-install.sh >"$(basename "$out")")
+      # Absolute path: the shasum-fallback tests remove sha256sum from PATH,
+      # but this fake still needs to produce a genuine checksum.
+      (cd "$(dirname "$out")" && "'"$REAL_SHA256SUM"'" zbx-install.sh >"$(basename "$out")")
     fi
     ;;
 esac
@@ -83,7 +86,9 @@ esac
 }
 
 run_install() {
-  run env -i PATH="$TOOLDIR" "$BASH_BIN" "$INSTALL" "$@" </dev/null
+  run env -i PATH="$TOOLDIR" \
+    ZBX_BOOTSTRAP_BASH_MAJOR="${FAKE_BASH_MAJOR:-}" \
+    "$BASH_BIN" "$INSTALL" "$@" </dev/null
 }
 
 # _headless CMD_STRING — runs install.sh fully detached from any controlling
@@ -199,6 +204,104 @@ _headless() {
   run_install --express --yes
   [ "$status" -eq 1 ]
   [[ "$output" != *"ARG<"* ]]
+}
+
+# Stock macOS has no sha256sum, only shasum (perl) — the checksum step must
+# fall back to it or the release channel dies before anything starts (the
+# original curl|bash-on-a-Mac bug). shasum is emulated here with a wrapper
+# around the real sha256sum so the -a 256 -c call performs a genuine check.
+@test "release checksum falls back to shasum -a 256 when sha256sum is absent (stock macOS)" {
+  fake_curl good
+  rm -f "$TOOLDIR/sha256sum"
+  fake shasum '
+args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -a) shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+exec "'"$REAL_SHA256SUM"'" ${args[@]+"${args[@]}"}
+'
+  run_install --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ARG<--express>"* ]]
+}
+
+@test "release checksum via shasum still aborts on a bad checksum" {
+  fake_curl bad
+  rm -f "$TOOLDIR/sha256sum"
+  fake shasum '
+args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -a) shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+exec "'"$REAL_SHA256SUM"'" ${args[@]+"${args[@]}"}
+'
+  run_install --express --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"ARG<"* ]]
+}
+
+@test "no sha256sum and no shasum aborts with a clear message, never execs" {
+  fake_curl good
+  rm -f "$TOOLDIR/sha256sum"
+  run_install --express --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Neither sha256sum nor shasum found"* ]]
+  [[ "$output" != *"ARG<"* ]]
+}
+
+# The bash-4 handoff: on Darwin under bash 3.2 with no modern bash anywhere,
+# the bootstrap must stop with brew instructions (exit 3) instead of exec'ing
+# the bundle under a bash that can't run it. FAKE_BASH_MAJOR drives the
+# ZBX_BOOTSTRAP_BASH_MAJOR test seam; uname is faked to Darwin.
+@test "Darwin + old bash + no modern bash prints brew guidance and exits 3" {
+  fake_curl good
+  fake uname 'printf "Darwin\n"'
+  # On this Linux CI box the degenerate "$(brew --prefix)/bin/bash" candidate
+  # would collapse to a MODERN /bin/bash, so fake brew to point at a prefix
+  # whose bash flunks the version probe — exactly what a real Mac's 3.2 does.
+  mkdir -p "$BATS_TEST_TMPDIR/oldbrew/bin"
+  printf '#!/bin/sh\nexit 1\n' >"$BATS_TEST_TMPDIR/oldbrew/bin/bash"
+  chmod +x "$BATS_TEST_TMPDIR/oldbrew/bin/bash"
+  fake brew 'printf "%s\n" "'"$BATS_TEST_TMPDIR"'/oldbrew"'
+  FAKE_BASH_MAJOR=3 run_install --express --yes
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"needs bash >= 4"* ]]
+  [[ "$output" == *"brew install bash"* ]]
+  [[ "$output" != *"ARG<"* ]]
+}
+
+# With brew present, its prefix's bin/bash (a modern one) must be picked as
+# the handoff target even when the hardcoded /opt/homebrew and /usr/local
+# candidates don't exist (non-default brew prefix).
+@test "Darwin + old bash hands off to brew --prefix bash when it is modern" {
+  fake_curl good
+  fake uname 'printf "Darwin\n"'
+  mkdir -p "$BATS_TEST_TMPDIR/brewprefix/bin"
+  ln -sf "$BASH_BIN" "$BATS_TEST_TMPDIR/brewprefix/bin/bash"
+  fake brew 'printf "%s\n" "'"$BATS_TEST_TMPDIR"'/brewprefix"'
+  FAKE_BASH_MAJOR=3 run_install --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ARG<--express>"* ]]
+  [[ "$output" == *"ARG<--yes>"* ]]
+}
+
+# Regression guard for the degenerate case: brew absent makes the
+# "$(brew --prefix)/bin/bash" candidate collapse to /bin/bash — which exists
+# but is the very 3.2 we're escaping. The per-candidate version probe must
+# reject it. On Linux (uname != Darwin) the old-bash fall-through keeps the
+# plain "bash" handoff rather than exiting 3.
+@test "old bash on non-Darwin falls through to plain bash handoff (no exit 3)" {
+  fake_curl good
+  fake uname 'printf "Linux\n"'
+  FAKE_BASH_MAJOR=3 run_install --express --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ARG<--express>"* ]]
 }
 
 @test "a curl failure (network down) aborts immediately with curl's own exit code and never execs" {
