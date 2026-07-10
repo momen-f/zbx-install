@@ -1,26 +1,21 @@
 # os_macos.sh — macOS agent support (§4, agent-only). macOS is not a Zabbix
-# server/proxy/frontend target; only the classic zabbix_agentd is shipped on
-# cdn.zabbix.com — as an official signed .pkg for Apple Silicon, and as a
-# tar.gz archive for Intel. This module holds the pure helpers (arch mapping +
-# URL builders); the Darwin detect branch and the download/install/launchd/
-# health flow build on it.
+# server/proxy/frontend target; only the classic zabbix_agentd is shipped, as
+# an official signed .pkg on cdn.zabbix.com. This module holds the pure helpers
+# (arch mapping + release-URL builder); the Darwin detect branch and the
+# download/install/launchd/health flow build on it.
 #
-# Verified against cdn.zabbix.com + an expanded .pkg (2026-07):
+# Verified against cdn.zabbix.com + an expanded .pkg (2026-07, re-verified via
+# the CI CDN-listing diagnostic 2026-07-10):
 #   - The CDN publishes a self-updating "latest" pointer per major, mirroring
 #     the Linux zabbix-release-latest idea:
 #       https://cdn.zabbix.com/zabbix/binaries/stable/<major>/latest/
 #         zabbix_agent-<major>-latest-macos-arm64[-openssl|-gnutls].pkg
-#   - The .pkg is ARM64-ONLY: Zabbix ships no macOS amd64 .pkg; Intel macOS
-#     gets the same "latest" pointer as a tar.gz archive
-#     (zabbix_agent-<major>-latest-macos-amd64[-openssl|-gnutls].tar.gz),
-#     which this module unpacks into the same paths the .pkg uses. The
-#     tar.gz URL shape follows the CDN's naming convention and is asserted
-#     live by the macos-agent CI job's liveness probe. Both 7.0 and 7.4.
+#   - macOS artifacts are ARM64-ONLY across the board: the latest listing has
+#     no macos-amd64 file in ANY form (.pkg or tar.gz), so Intel Macs cannot
+#     be supported at all for 7.x. Both 7.0 and 7.4 offer the arm64 .pkg.
 #   - the .pkg installs: /usr/local/sbin/zabbix_agentd,
 #     /usr/local/etc/zabbix/zabbix_agentd.conf (ships as .conf.NEW),
 #     /Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist; agent port 10050.
-#     The tar path reproduces exactly this layout (plus a hand-written plist
-#     with the same label), so config/service/health/uninstall are shared.
 
 readonly ZBX_MACOS_CDN="https://cdn.zabbix.com/zabbix/binaries/stable"
 
@@ -50,56 +45,17 @@ zbx_macos_agent_url() {
     "$ZBX_MACOS_CDN" "$major" "$major" "$arch" "$encsfx"
 }
 
-# zbx_macos_agent_tarball_url MAJOR ARCH [ENC] — pure: the "latest" tar.gz
-# archive URL, same shape as the .pkg pointer. This is how Zabbix ships the
-# Intel (amd64) macOS agent — there is no amd64 .pkg.
-zbx_macos_agent_tarball_url() {
-  local major="$1" arch="$2" enc="${3:-openssl}"
-  local encsfx=""
-  case "$enc" in
-    openssl) encsfx="-openssl" ;;
-    gnutls) encsfx="-gnutls" ;;
-    none | "") encsfx="" ;;
-  esac
-  printf '%s/%s/latest/zabbix_agent-%s-latest-macos-%s%s.tar.gz' \
-    "$ZBX_MACOS_CDN" "$major" "$major" "$arch" "$encsfx"
-}
-
-# _macos_variant — pure: which install mechanism this Mac gets, from the
-# already-detected DETECT_ARCH. arm64 → the signed .pkg; amd64 (Intel) → the
-# tar.gz archive. detect_arch has already rejected anything else.
-_macos_variant() {
-  case "$(_macos_arch "$DETECT_ARCH")" in
-    arm64) printf 'pkg' ;;
-    amd64) printf 'tar' ;;
-    *) return 1 ;;
-  esac
-}
-
 # Paths the .pkg installs (verified by expanding it). The conf path is an
 # overridable test seam, matching ZBX_ETC_DIR on the Linux side.
 : "${ZBX_MACOS_AGENT_CONF:=/usr/local/etc/zabbix/zabbix_agentd.conf}"
 : "${ZBX_MACOS_AGENT_PLIST:=/Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist}"
 readonly ZBX_MACOS_AGENT_LABEL="com.zabbix.zabbix_agentd"
 
-# macos_agent_install — dispatcher: signed .pkg on Apple Silicon, tar.gz
-# archive on Intel (the only form Zabbix ships for amd64).
+# macos_agent_install — download the signed .pkg and install it. run() makes
+# every system command DRY_RUN-aware. Integrity is the .pkg's Apple Developer
+# ID signature (verified to be Zabbix's), not a hash: the self-updating
+# "latest" build has no stable checksum to pin.
 macos_agent_install() {
-  case "$(_macos_variant)" in
-    pkg) _macos_agent_install_pkg ;;
-    tar) _macos_agent_install_tar ;;
-    *)
-      log ERROR "no macOS agent install path for arch '$DETECT_ARCH'"
-      return 1
-      ;;
-  esac
-}
-
-# _macos_agent_install_pkg — download the signed .pkg and install it. run()
-# makes every system command DRY_RUN-aware. Integrity is the .pkg's Apple
-# Developer ID signature (verified to be Zabbix's), not a hash: the
-# self-updating "latest" build has no stable checksum to pin.
-_macos_agent_install_pkg() {
   local url pkg base
   url="$(zbx_macos_agent_url "$PLAN_ZBX_VERSION" arm64 openssl)"
   # installer(8) validates the extension and rejects a path not ending in
@@ -117,96 +73,6 @@ _macos_agent_install_pkg() {
     fi
   fi
   run installer -pkg "$pkg" -target / || return 1
-}
-
-# _macos_agent_install_tar — the Intel path: download the tar.gz archive,
-# verify the binaries' codesign signature where present (the archive itself
-# carries no Apple signature — unlike the .pkg — so integrity otherwise rests
-# on TLS to cdn.zabbix.com; a WARN says so), and place the files in exactly
-# the layout the .pkg produces, so config/service/health/uninstall are shared.
-_macos_agent_install_tar() {
-  local url tarball unpack agentd f
-  url="$(zbx_macos_agent_tarball_url "$PLAN_ZBX_VERSION" amd64 openssl)"
-  log INFO "macOS agent archive: $url"
-  if [[ "$DRY_RUN" == "1" ]]; then
-    printf '  + curl -fsSL -o <tmp>/zbx-agent.tar.gz %s\n' "$url"
-    printf '  + tar -xzf <tmp>/zbx-agent.tar.gz\n'
-    printf '  + install zabbix_agentd -> /usr/local/sbin, zabbix_get/zabbix_sender -> /usr/local/bin\n'
-    printf '  + seed %s.NEW\n' "$ZBX_MACOS_AGENT_CONF"
-    printf '  + write LaunchDaemon %s\n' "$ZBX_MACOS_AGENT_PLIST"
-    return 0
-  fi
-  unpack="$(mktemp -d 2>/dev/null || echo "/tmp/zbx-macos-agent-tar.$$")"
-  mkdir -p "$unpack"
-  ZBX_TEMPFILES+=("$unpack")
-  tarball="$unpack/zbx-agent.tar.gz"
-  run curl -fsSL -o "$tarball" "$url" || return 1
-  run tar -xzf "$tarball" -C "$unpack" || return 1
-  # Locate rather than assume the archive's top-level layout (bin/ sbin/ conf/
-  # today, but a wrapper directory would be harmless).
-  agentd="$(find "$unpack" -type f -name zabbix_agentd | head -n1)"
-  if [[ -z "$agentd" ]]; then
-    log ERROR "archive did not contain zabbix_agentd — layout changed upstream?"
-    return 1
-  fi
-  # Best-effort signature check: the loose binaries are Developer ID-signed in
-  # current archives; refuse only a *bad* signature, warn when unsigned.
-  if command -v codesign >/dev/null 2>&1; then
-    if codesign --verify "$agentd" 2>/dev/null; then
-      log INFO "zabbix_agentd codesign signature verified"
-    else
-      log WARN "archive binaries carry no verifiable signature — integrity rests on TLS to cdn.zabbix.com"
-    fi
-  fi
-  run install -d /usr/local/sbin /usr/local/bin || return 1
-  run install -m 755 "$agentd" /usr/local/sbin/zabbix_agentd || return 1
-  for f in zabbix_get zabbix_sender; do
-    local src
-    src="$(find "$unpack" -type f -name "$f" | head -n1)"
-    [[ -n "$src" ]] && { run install -m 755 "$src" "/usr/local/bin/$f" || return 1; }
-  done
-  # Seed the shipped conf as .conf.NEW — the same convention the .pkg uses —
-  # so macos_agent_config's .NEW promotion handles fresh vs. re-install.
-  local conf_src
-  conf_src="$(find "$unpack" -type f -name zabbix_agentd.conf | head -n1)"
-  if [[ -n "$conf_src" && ! -f "$ZBX_MACOS_AGENT_CONF" ]]; then
-    run install -d "$(dirname "$ZBX_MACOS_AGENT_CONF")" || return 1
-    run install -m 644 "$conf_src" "${ZBX_MACOS_AGENT_CONF}.NEW" || return 1
-  fi
-  _macos_write_plist || return 1
-}
-
-# _macos_write_plist — hand-write the LaunchDaemon the .pkg would have
-# installed, with the SAME label and path so service/health/uninstall need no
-# variant awareness. -f keeps the agent in the foreground so launchd
-# supervises it (KeepAlive restarts it if it dies).
-_macos_write_plist() {
-  if [[ "$DRY_RUN" == "1" ]]; then
-    printf '  + write LaunchDaemon %s\n' "$ZBX_MACOS_AGENT_PLIST"
-    return 0
-  fi
-  cat >"$ZBX_MACOS_AGENT_PLIST" <<EOF || return 1
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${ZBX_MACOS_AGENT_LABEL}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/sbin/zabbix_agentd</string>
-        <string>-c</string>
-        <string>${ZBX_MACOS_AGENT_CONF}</string>
-        <string>-f</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
-EOF
-  chmod 644 "$ZBX_MACOS_AGENT_PLIST"
 }
 
 # macos_agent_config — point the agent at its server. The .pkg seeds

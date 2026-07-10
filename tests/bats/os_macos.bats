@@ -50,51 +50,14 @@ dprobe() {
   [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/latest/zabbix_agent-7.0-latest-macos-arm64-openssl.pkg" ]
 }
 
-@test "zbx_macos_agent_tarball_url: 7.4 amd64 openssl (the Intel archive)" {
-  mprobe 'zbx_macos_agent_tarball_url 7.4 amd64'
-  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.4/latest/zabbix_agent-7.4-latest-macos-amd64-openssl.tar.gz" ]
-}
-
-@test "zbx_macos_agent_tarball_url: 7.0 amd64, no-encryption drops the suffix" {
-  mprobe 'zbx_macos_agent_tarball_url 7.0 amd64 none'
-  [ "$output" = "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/latest/zabbix_agent-7.0-latest-macos-amd64.tar.gz" ]
-}
-
-@test "_macos_variant: arm64 -> pkg, x86_64 -> tar" {
-  mprobe 'DETECT_ARCH=arm64; _macos_variant; echo; DETECT_ARCH=x86_64; _macos_variant; echo'
-  [ "${lines[0]}" = "pkg" ]
-  [ "${lines[1]}" = "tar" ]
-}
-
 # --- execute path (dry-run) ---------------------------------------------------
-@test "macos_agent_install (dry-run, arm64) fetches the arm64 latest .pkg and runs installer" {
-  dprobe 'PLAN_ZBX_VERSION=7.4 DETECT_ARCH=arm64; macos_agent_install'
+@test "macos_agent_install (dry-run) fetches the arm64 latest .pkg and runs installer" {
+  dprobe 'PLAN_ZBX_VERSION=7.4; macos_agent_install'
   [ "$status" -eq 0 ]
   [[ "$output" == *"cdn.zabbix.com/zabbix/binaries/stable/7.4/latest/zabbix_agent-7.4-latest-macos-arm64-openssl.pkg"* ]]
   # run() prints each arg on its own line (global IFS=$'\n\t'), so match the
   # command token, not "installer -pkg".
   [[ "$output" == *"+ installer"* ]]
-}
-
-@test "macos_agent_install (dry-run, x86_64) routes to the amd64 tar.gz archive path" {
-  dprobe 'PLAN_ZBX_VERSION=7.4 DETECT_ARCH=x86_64; macos_agent_install'
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"cdn.zabbix.com/zabbix/binaries/stable/7.4/latest/zabbix_agent-7.4-latest-macos-amd64-openssl.tar.gz"* ]]
-  [[ "$output" == *"tar -xzf"* ]]
-  [[ "$output" == *"/usr/local/sbin"* ]]
-  [[ "$output" == *"write LaunchDaemon"* ]]
-  [[ "$output" != *"+ installer"* ]]
-}
-
-@test "_macos_write_plist writes a launchd plist with the shared label and foreground agent" {
-  # Real write (not dry-run) into a temp path via the ZBX_MACOS_AGENT_PLIST seam.
-  dprobe 'DRY_RUN=0 ZBX_MACOS_AGENT_PLIST="'"$BATS_TEST_TMPDIR"'/zbx.plist"
-    _macos_write_plist && cat "$ZBX_MACOS_AGENT_PLIST"'
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"<string>com.zabbix.zabbix_agentd</string>"* ]]
-  [[ "$output" == *"<string>/usr/local/sbin/zabbix_agentd</string>"* ]]
-  [[ "$output" == *"<string>-f</string>"* ]]
-  [[ "$output" == *"<key>KeepAlive</key>"* ]]
 }
 
 @test "macos_agent_config (dry-run) points the agent at the server, writes nothing" {
@@ -104,7 +67,7 @@ dprobe() {
 }
 
 @test "macos_agent_run (dry-run) completes install -> config -> service -> health" {
-  dprobe 'PLAN_ZBX_VERSION=7.4 PLAN_ZBX_SERVER_IP=192.0.2.10 DETECT_ARCH=arm64; macos_agent_run'
+  dprobe 'PLAN_ZBX_VERSION=7.4 PLAN_ZBX_SERVER_IP=192.0.2.10; macos_agent_run'
   [ "$status" -eq 0 ]
 }
 

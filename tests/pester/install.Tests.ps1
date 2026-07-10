@@ -21,16 +21,12 @@ Describe 'Get-ZbxMsiUrl' {
         Get-ZbxMsiUrl -Major '7.0' -Arch 'amd64' |
             Should -Be 'https://cdn.zabbix.com/zabbix/binaries/stable/7.0/latest/zabbix_agent-7.0-latest-windows-amd64-openssl.msi'
     }
-    It 'arm64 arch token lands in the filename' {
-        Get-ZbxMsiUrl -Major '7.4' -Arch 'arm64' -IsAgent2 |
-            Should -Match 'zabbix_agent2-7\.4-latest-windows-arm64-openssl\.msi$'
-    }
 }
 
 Describe 'Get-ZbxArch' {
-    It 'maps AMD64 -> amd64 and ARM64 -> arm64' {
+    It 'maps AMD64 -> amd64, and ARM64 -> amd64 (no arm64 MSI upstream; x64 emulation)' {
         Get-ZbxArch -Machine 'AMD64' | Should -Be 'amd64'
-        Get-ZbxArch -Machine 'ARM64' | Should -Be 'arm64'
+        Get-ZbxArch -Machine 'ARM64' | Should -Be 'amd64'
     }
     It 'refuses 32-bit Windows (no Zabbix build)' {
         { Get-ZbxArch -Machine 'x86' } | Should -Throw

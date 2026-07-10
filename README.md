@@ -61,7 +61,7 @@ or see [SPEC.md](SPEC.md) §7 (CLI) and Appendix A (`--config` file format).
 | RHEL-like (RHEL, CentOS Stream, Rocky, AlmaLinux, Oracle Linux) | 8, 9 | dnf |
 | Amazon Linux | 2023 | dnf |
 | SUSE (SLES, openSUSE Leap) | SLES 15 SP5+, Leap 15.6 | zypper |
-| macOS (Apple Silicon + Intel) | agent only (7.0 / 7.4) | .pkg / tar.gz |
+| macOS (Apple Silicon) | agent only (7.0 / 7.4) | .pkg |
 | Windows (10 / Server 2016+) | agent only (7.0 / 7.4), via `install.ps1` | MSI |
 
 Offers Zabbix `7.0` (LTS, default) and `7.4` (current stable). Full detail

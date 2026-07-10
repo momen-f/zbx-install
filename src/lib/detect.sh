@@ -167,11 +167,12 @@ _arch_confirmed_for_os() {
 
 detect_arch() {
   DETECT_ARCH="${ZBX_UNAME_M:-$(uname -m)}"
-  # macOS: Apple Silicon gets the signed .pkg, Intel gets the tar.gz archive
-  # (§4) — both supported; anything else Zabbix does not build for.
+  # macOS: Zabbix ships 7.x agent binaries for arm64 only — the CDN's latest
+  # listing (verified live via CI, 2026-07) has NO macos-amd64 artifacts in
+  # any form, so Intel Macs cannot be supported (§4).
   if [[ "$DETECT_OS_ID" == "macos" ]]; then
     case "$DETECT_ARCH" in
-      arm64 | x86_64) DETECT_ARCH_OK="yes" ;;
+      arm64) DETECT_ARCH_OK="yes" ;;
       *) DETECT_ARCH_OK="no" ;;
     esac
     return 0

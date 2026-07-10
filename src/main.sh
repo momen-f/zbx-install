@@ -705,10 +705,10 @@ uninstall_run() {
 }
 
 # macos_main_flow — macOS is agent-only (Zabbix ships no macOS server/proxy):
-# a self-contained install of zabbix_agentd — signed .pkg on Apple Silicon,
-# tar.gz archive on Intel — pointed at the user's server. Used in place of
-# the Linux recommend_run/main_flow for DETECT_OS_ID=macos; guard_arch has
-# already rejected anything that is neither arm64 nor x86_64.
+# a self-contained install of the signed zabbix_agentd .pkg pointed at the
+# user's server. Used in place of the Linux recommend_run/main_flow for
+# DETECT_OS_ID=macos; guard_arch has already rejected non-arm64 Macs (the
+# CDN ships no Intel macOS agent at all for 7.x — verified 2026-07).
 macos_main_flow() {
   if [[ "$MODE" == "proxy-only" ]]; then
     usage_err "Zabbix ships no macOS server or proxy — macOS installs the agent only; re-run without --proxy-only"
@@ -718,9 +718,7 @@ macos_main_flow() {
   agent_params
   printf '\n%sPlan (macOS agent)%s\n' "$C_BOLD" "$C_RESET"
   ui_row "OS:" "${DETECT_OS_NAME} (${DETECT_ARCH})"
-  local variant_label="signed .pkg"
-  [[ "$(_macos_variant)" == "tar" ]] && variant_label="tar.gz archive"
-  ui_row "Install:" "Zabbix agent ${PLAN_ZBX_VERSION} — zabbix_agentd (${variant_label})"
+  ui_row "Install:" "Zabbix agent ${PLAN_ZBX_VERSION} — zabbix_agentd (signed .pkg)"
   ui_row "Reports to:" "$PLAN_ZBX_SERVER_IP"
   [[ "$DRY_RUN" == "1" ]] && ui_row "Mode:" "dry-run (no changes made)"
   plan_confirm || {

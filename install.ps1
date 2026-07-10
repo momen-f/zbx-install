@@ -64,13 +64,15 @@ $ErrorActionPreference = 'Stop'
 $ZbxCdn = 'https://cdn.zabbix.com/zabbix/binaries/stable'
 
 # Get-ZbxArch - map the machine arch to the token Zabbix uses in MSI names.
-# Pure; the Windows analog of _macos_arch. Fails on an arch Zabbix does not
-# build for (32-bit Windows is not offered).
+# Pure; the Windows analog of _macos_arch. The CDN ships Windows MSIs for
+# amd64 and i386 only (verified against the latest listing, 2026-07) - no
+# arm64 MSI exists, so Windows-on-ARM gets the amd64 MSI and runs the agent
+# under the OS's built-in x64 emulation. 32-bit Windows is not offered.
 function Get-ZbxArch {
     param([string]$Machine = $env:PROCESSOR_ARCHITECTURE)
     switch ($Machine) {
         'AMD64' { 'amd64' }
-        'ARM64' { 'arm64' }
+        'ARM64' { 'amd64' }
         default { throw "Zabbix ships no Windows agent for architecture '$Machine'" }
     }
 }

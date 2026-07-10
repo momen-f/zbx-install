@@ -599,17 +599,14 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   [[ "$output" == *"+ installer"* ]]
 }
 
-@test "macOS on Intel (x86_64): express dry-run routes to the tar.gz agent install and exits 0" {
+@test "macOS on Intel (x86_64) is rejected — Zabbix ships no macOS amd64 agent at all" {
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     ZBX_UNAME_S=Darwin ZBX_UNAME_M=x86_64 DETECT_SKIP_NET=1 \
-    ZBX_ETC_DIR="$ETCDIR" STATE_FILE="$BATS_TEST_TMPDIR/state" ZBX_HEALTH_PORT_TRIES=1 \
+    ZBX_ETC_DIR="$ETCDIR" STATE_FILE="$BATS_TEST_TMPDIR/state" \
     "$BASH_BIN" "$DIST" --express --yes --dry-run --no-color \
     --log-file "$BATS_TEST_TMPDIR/zbx-macos-intel.log"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Plan (macOS agent)"* ]]
-  [[ "$output" == *"tar.gz archive"* ]]
-  [[ "$output" == *"macos-amd64-openssl.tar.gz"* ]]
-  [[ "$output" != *"+ installer"* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"unsupported architecture: x86_64"* ]]
 }
 
 @test "network guard: unattended without dry-run exits 4 when curl fails" {
