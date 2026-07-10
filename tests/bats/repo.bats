@@ -25,37 +25,6 @@ rprobe() {
   [ "$output" = "https://repo.zabbix.com/zabbix/7.4/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.4+debian12_all.deb" ]
 }
 
-# --- apt: Raspberry Pi OS / Debian-on-ARM route to the raspbian repo ----------
-# Debian-family ARM packages live only under /raspbian/ (the /debian/ tree is
-# x86-only) and the bootstrap deb there is always +debian<ver>. 64-bit Pi OS
-# reports ID=debian, 32-bit reports ID=raspbian — both must land on raspbian.
-@test "zbx_release_url apt: 32-bit Raspberry Pi OS (raspbian, armhf) -> raspbian repo, +debian12" {
-  rprobe 'zbx_release_url flat debian raspbian 12 "" 7.0 armhf'
-  [ "$output" = "https://repo.zabbix.com/zabbix/7.0/raspbian/pool/main/z/zabbix-release/zabbix-release_latest_7.0+debian12_all.deb" ]
-}
-
-@test "zbx_release_url apt: 64-bit Raspberry Pi OS (ID=debian, aarch64) -> raspbian repo by arch" {
-  rprobe 'zbx_release_url flat debian debian 12 "" 7.0 aarch64'
-  [ "$output" = "https://repo.zabbix.com/zabbix/7.0/raspbian/pool/main/z/zabbix-release/zabbix-release_latest_7.0+debian12_all.deb" ]
-}
-
-@test "zbx_release_url apt: debian on x86_64 stays on the debian repo (arch-routing boundary)" {
-  rprobe 'zbx_release_url flat debian debian 12 "" 7.0 x86_64'
-  [ "$output" = "https://repo.zabbix.com/zabbix/7.0/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.0+debian12_all.deb" ]
-}
-
-# 7.4 uses the legacy /release/ layout for the bootstrap deb (its ARM binaries
-# live under /7.4/stable/raspbian/, which zabbix-release then configures).
-@test "zbx_release_url apt legacy: Raspberry Pi OS (raspbian, armhf) + 7.4 -> raspbian /release/ bootstrap" {
-  rprobe 'zbx_release_url legacy debian raspbian 12 "" 7.4 armhf'
-  [ "$output" = "https://repo.zabbix.com/zabbix/7.4/release/raspbian/pool/main/z/zabbix-release/zabbix-release_latest_7.4+debian12_all.deb" ]
-}
-
-@test "zbx_release_url apt legacy: 64-bit Pi (debian, aarch64) + 7.4 -> raspbian /release/ bootstrap" {
-  rprobe 'zbx_release_url legacy debian debian 12 "" 7.4 aarch64'
-  [ "$output" = "https://repo.zabbix.com/zabbix/7.4/release/raspbian/pool/main/z/zabbix-release/zabbix-release_latest_7.4+debian12_all.deb" ]
-}
-
 # --- dnf (rhel-like) -----------------------------------------------------------
 @test "zbx_release_url dnf flat: rhel major 9 / 7.0 / x86_64" {
   rprobe 'zbx_release_url flat rhel rocky "" 9 7.0 x86_64'

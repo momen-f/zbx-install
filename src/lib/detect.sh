@@ -111,7 +111,6 @@ detect_supported() {
     ubuntu) [[ "$v" == 22.04 || "$v" == 24.04 ]] && DETECT_SUPPORTED="yes" ;;
     rhel | centos | rocky | almalinux | ol) [[ "$m" == 8 || "$m" == 9 ]] && DETECT_SUPPORTED="yes" ;;
     amzn) [[ "$m" == 2023 ]] && DETECT_SUPPORTED="yes" ;;
-    raspbian) [[ "$m" == 12 ]] && DETECT_SUPPORTED="yes" ;; # 32-bit Raspberry Pi OS; 64-bit reports debian (handled above)
     sles) [[ "$m" == 15 && "$minor" -ge 5 ]] && DETECT_SUPPORTED="yes" ;;
     opensuse-leap) [[ "$v" == 15.6 ]] && DETECT_SUPPORTED="yes" ;;
     macos) DETECT_SUPPORTED="yes" ;; # agent-only; any recent macOS (arch gate handles Intel, §4)
@@ -144,24 +143,14 @@ detect_pkgmgr() {
 
 # --- architecture (host, class is pure) -------------------------------------
 # _arch_class ARCH — yes (supported), maybe (repo-dependent, §15.10), or no.
-# All ARM (32- and 64-bit) is repo-dependent: Zabbix publishes arm packages
-# only for some OS/version combos (and Debian-family arm lives in the raspbian
-# repo, not debian) — detect_arch promotes the verified combos to "yes".
+# aarch64/arm64 is repo-dependent: Zabbix publishes arm packages only for some
+# OS/version combos — detect_arch promotes the verified ones (Amazon Linux 2023)
+# to "yes".
 _arch_class() {
   case "$1" in
     x86_64 | amd64) echo yes ;;
-    aarch64 | arm64 | armhf | armv7l | armv6l) echo maybe ;;
+    aarch64 | arm64) echo maybe ;;
     *) echo no ;;
-  esac
-}
-
-# _arch_is_arm ARCH — any 32- or 64-bit ARM. Zabbix ships all Debian-family ARM
-# packages (armhf + arm64) only under the raspbian repo (§15.10); repo.sh and
-# the 7.4-on-arm plan gate key off this.
-_arch_is_arm() {
-  case "$1" in
-    aarch64 | arm64 | armhf | armv7l | armv6l) return 0 ;;
-    *) return 1 ;;
   esac
 }
 
@@ -172,11 +161,6 @@ _arch_is_arm() {
 _arch_confirmed_for_os() {
   case "$DETECT_OS_ID" in
     amzn) [[ "$DETECT_OS_MAJOR" == 2023 ]] ;;
-    # Raspberry Pi OS 12 (32-bit reports raspbian; 64-bit reports debian) and
-    # Debian 12 on arm are all served by Zabbix's raspbian repo (armhf+arm64),
-    # verified 2026-07. repo.sh routes debian-family arm there.
-    raspbian) [[ "$DETECT_OS_MAJOR" == 12 ]] ;;
-    debian) [[ "$DETECT_OS_MAJOR" == 12 ]] ;;
     *) return 1 ;;
   esac
 }

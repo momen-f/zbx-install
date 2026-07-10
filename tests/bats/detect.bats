@@ -56,11 +56,6 @@ probe() {
   [ "$output" = "amzn 2023 rhel yes" ]
 }
 
-@test "raspberry pi os 12 (32-bit, raspbian) -> supported debian" {
-  probe os-release.raspbian12
-  [ "$output" = "raspbian 12 debian yes" ]
-}
-
 @test "macOS (Darwin) -> macos family, supported (agent-only, no os-release)" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
     ZBX_UNAME_S=Darwin; detect_os; detect_family; detect_supported;
@@ -110,25 +105,17 @@ probe() {
 }
 
 # --- pure helpers ------------------------------------------------------------
-@test "_arch_class classifies architectures (all ARM is repo-dependent 'maybe')" {
+@test "_arch_class classifies architectures" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
-    for a in x86_64 amd64 aarch64 arm64 armhf armv7l armv6l ppc64le; do _arch_class "$a"; done | paste -sd" " -'
-  [ "$output" = "yes yes maybe maybe maybe maybe maybe no" ]
+    for a in x86_64 amd64 aarch64 arm64 armv7l; do _arch_class "$a"; done | paste -sd" " -'
+  [ "$output" = "yes yes maybe maybe no" ]
 }
 
-@test "_arch_is_arm recognizes 32- and 64-bit ARM only" {
-  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
-    for a in aarch64 arm64 armhf armv7l armv6l x86_64 amd64 ppc64le; do
-      if _arch_is_arm "$a"; then echo -n "1"; else echo -n "0"; fi
-    done'
-  [ "$output" = "11111000" ]
-}
-
-@test "_arch_confirmed_for_os: amzn 2023, raspbian 12, debian 12 promote arm; others do not" {
+@test "_arch_confirmed_for_os: only Amazon Linux 2023 promotes arm" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
     chk() { DETECT_OS_ID="$1" DETECT_OS_MAJOR="$2"; if _arch_confirmed_for_os; then echo -n y; else echo -n n; fi; }
-    chk amzn 2023; chk amzn 2; chk raspbian 12; chk raspbian 11; chk debian 12; chk debian 13; chk ubuntu 24; chk rocky 9; echo'
-  [ "$output" = "ynynynnn" ]
+    chk amzn 2023; chk amzn 2; chk debian 12; chk rocky 9; echo'
+  [ "$output" = "ynnn" ]
 }
 
 @test "_osr_get strips quotes and preserves inner spaces" {

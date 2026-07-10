@@ -37,7 +37,7 @@ setup() {
 # stub present to reach their (DRY_RUN no-op) success path at all.
 _pkgmgr_fake_for() {
   case "$1" in
-    *ubuntu* | *debian* | *raspbian* | *mint*) echo apt-get ;;
+    *ubuntu* | *debian* | *mint*) echo apt-get ;;
     *rocky* | *alma* | *rhel* | *centos* | *fedora*) echo dnf ;;
     *sles* | *leap*) echo zypper ;;
     *) echo "" ;;
@@ -570,11 +570,11 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   [[ "$output" == *"existing Zabbix detected"* ]]
 }
 
-@test "unattended unsupported arch (ppc64le) exits 3" {
-  fake uname 'echo ppc64le'
+@test "unattended unsupported arch (armv7l) exits 3" {
+  fake uname 'echo armv7l'
   zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
   [ "$status" -eq 3 ]
-  [[ "$output" == *"unsupported architecture: ppc64le"* ]]
+  [[ "$output" == *"unsupported architecture: armv7l"* ]]
 }
 
 @test "aarch64 (arch class maybe) continues with a repo-coverage warning" {
@@ -582,29 +582,6 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
   [ "$status" -eq 0 ]
   [[ "$output" == *"arch aarch64: Zabbix repo coverage varies"* ]]
-  [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
-}
-
-@test "armv7l (32-bit ARM) on a non-confirmed OS is now repo-dependent (maybe), not a hard exit 3" {
-  fake uname 'echo armv7l'
-  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"arch armv7l: Zabbix repo coverage varies"* ]]
-}
-
-@test "Raspberry Pi OS (raspbian, armhf) is a supported arm target — no repo-coverage warning" {
-  fake uname 'echo armv7l'
-  zx os-release.raspbian12 meminfo.4gb --dry-run --express --yes
-  [ "$status" -eq 0 ]
-  ! [[ "$output" == *"repo coverage varies"* ]]
-  [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
-}
-
-@test "Raspberry Pi OS + Zabbix 7.4 is accepted (7.4 ships ARM packages via the raspbian /stable/ tree)" {
-  fake uname 'echo armv7l'
-  zx os-release.raspbian12 meminfo.4gb --dry-run --express --yes --zabbix-version 7.4
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"7.4 (current stable)"* ]]
   [[ "$output" == *"DRY-RUN: no commands were executed"* ]]
 }
 
