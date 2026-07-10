@@ -4,14 +4,15 @@
 # (arch mapping + release-URL builder); the Darwin detect branch and the
 # download/install/launchd/health flow build on it.
 #
-# Verified against cdn.zabbix.com + an expanded .pkg (2026-07):
+# Verified against cdn.zabbix.com + an expanded .pkg (2026-07, re-verified via
+# the CI CDN-listing diagnostic 2026-07-10):
 #   - The CDN publishes a self-updating "latest" pointer per major, mirroring
 #     the Linux zabbix-release-latest idea:
 #       https://cdn.zabbix.com/zabbix/binaries/stable/<major>/latest/
 #         zabbix_agent-<major>-latest-macos-arm64[-openssl|-gnutls].pkg
-#   - The .pkg is ARM64-ONLY: Zabbix ships no macOS amd64 .pkg (Intel macOS is
-#     tar.gz-archive-only), so this path supports Apple Silicon. Both 7.0 and
-#     7.4 offer the arm64 .pkg.
+#   - macOS artifacts are ARM64-ONLY across the board: the latest listing has
+#     no macos-amd64 file in ANY form (.pkg or tar.gz), so Intel Macs cannot
+#     be supported at all for 7.x. Both 7.0 and 7.4 offer the arm64 .pkg.
 #   - the .pkg installs: /usr/local/sbin/zabbix_agentd,
 #     /usr/local/etc/zabbix/zabbix_agentd.conf (ships as .conf.NEW),
 #     /Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist; agent port 10050.

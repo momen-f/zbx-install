@@ -599,7 +599,7 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   [[ "$output" == *"+ installer"* ]]
 }
 
-@test "macOS on Intel (x86_64) is rejected — Zabbix ships no macOS amd64 .pkg" {
+@test "macOS on Intel (x86_64) is rejected — Zabbix ships no macOS amd64 agent at all" {
   run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
     ZBX_UNAME_S=Darwin ZBX_UNAME_M=x86_64 DETECT_SKIP_NET=1 \
     ZBX_ETC_DIR="$ETCDIR" STATE_FILE="$BATS_TEST_TMPDIR/state" \

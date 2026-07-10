@@ -707,7 +707,8 @@ uninstall_run() {
 # macos_main_flow — macOS is agent-only (Zabbix ships no macOS server/proxy):
 # a self-contained install of the signed zabbix_agentd .pkg pointed at the
 # user's server. Used in place of the Linux recommend_run/main_flow for
-# DETECT_OS_ID=macos; guard_arch has already rejected non-arm64 Macs.
+# DETECT_OS_ID=macos; guard_arch has already rejected non-arm64 Macs (the
+# CDN ships no Intel macOS agent at all for 7.x — verified 2026-07).
 macos_main_flow() {
   if [[ "$MODE" == "proxy-only" ]]; then
     usage_err "Zabbix ships no macOS server or proxy — macOS installs the agent only; re-run without --proxy-only"

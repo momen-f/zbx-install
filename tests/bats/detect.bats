@@ -64,7 +64,7 @@ probe() {
   [ "$output" = "macos macos yes" ]
 }
 
-@test "detect_arch on macOS: arm64 is supported, Intel x86_64 is not (.pkg is arm64-only)" {
+@test "detect_arch on macOS: arm64 is supported, Intel x86_64 is not (no upstream amd64 artifacts)" {
   run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'";
     DETECT_OS_ID=macos ZBX_UNAME_M=arm64;  detect_arch; a="$DETECT_ARCH_OK";
     DETECT_OS_ID=macos ZBX_UNAME_M=x86_64; detect_arch; b="$DETECT_ARCH_OK";

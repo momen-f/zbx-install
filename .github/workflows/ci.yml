@@ -389,3 +389,73 @@ jobs:
           ! test -f /Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist
           echo "=== no longer listening on 10050 ==="
           ! (sudo lsof -nP -iTCP:10050 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN)
+
+      # Intel Macs are unsupported — the CDN listing (checked here) contains
+      # no macos-amd64 artifact in any form for 7.x. This step both asserts
+      # the clean rejection and re-checks the listing, so if Zabbix ever
+      # starts shipping Intel builds again this fails loudly as a prompt to
+      # add support back.
+      - name: Intel (x86_64) is rejected; CDN still ships no macos-amd64 artifact
+        run: |
+          set +e
+          out="$(ZBX_UNAME_M=x86_64 "$BASH_BIN" dist/zbx-install.sh \
+            --express --yes --dry-run --no-color 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          test "$rc" -eq 3
+          echo "$out" | grep -q "unsupported architecture: x86_64"
+          echo "=== CDN listing must still have no macos-amd64 entries ==="
+          ! (curl -fsSL "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/latest/" \
+            | grep -o 'macos-amd64')
+
+  # Windows agent acceptance: a REAL install of the official Zabbix agent MSI
+  # via the native install.ps1 — the only way to run zbx-install on Windows
+  # (no bash). Covers both the classic agentd (default) and agent2, plus
+  # uninstall, and doubles as the live verification of the CDN MSI URL shape.
+  windows-agent:
+    runs-on: windows-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PSScriptAnalyzer lint
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          # Write-Host is deliberate (interactive installer talking to a
+          # console); PSReviewUnusedParameter false-positives on script params
+          # that are only read inside functions.
+          $findings = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error `
+            -ExcludeRule PSAvoidUsingWriteHost,PSReviewUnusedParameter
+          $findings | Format-Table -AutoSize
+          if ($findings) { exit 1 }
+
+      - name: Pester unit tests
+        run: |
+          Install-Module Pester -Force -Scope CurrentUser -SkipPublisherCheck
+          Invoke-Pester tests/pester -CI
+
+      - name: Real agent install (classic zabbix_agentd)
+        run: ./install.ps1 -Server 127.0.0.1 -Yes
+
+      - name: Verify service running and listening on 10050
+        run: |
+          Get-Service 'Zabbix Agent*' | Format-Table -AutoSize
+          if (-not (Get-Service 'Zabbix Agent*' | Where-Object Status -eq Running)) { exit 1 }
+          if (-not (Get-NetTCPConnection -LocalPort 10050 -State Listen -ErrorAction SilentlyContinue)) { exit 1 }
+
+      - name: -Uninstall removes the agent
+        run: |
+          ./install.ps1 -Uninstall -Yes
+          if (Get-Service 'Zabbix Agent*' -ErrorAction SilentlyContinue) { exit 1 }
+
+      - name: Agent2 install/uninstall round-trip
+        run: |
+          ./install.ps1 -Agent2 -Server 127.0.0.1 -Yes
+          if (-not (Get-Service 'Zabbix Agent*' | Where-Object Status -eq Running)) { exit 1 }
+          ./install.ps1 -Uninstall -Yes
+          if (Get-Service 'Zabbix Agent*' -ErrorAction SilentlyContinue) { exit 1 }
+
+      - name: Surface the msiexec log on failure
+        if: failure()
+        run: Get-Content "$env:TEMP\zbx-agent-msi.log" -Tail 100 -ErrorAction SilentlyContinue
