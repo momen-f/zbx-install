@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  # Manual fallback for when the tag can't be pushed directly (e.g. from a
+  # remote session whose git credentials are scoped to one branch):
+  # dispatch with the tag name and `gh release create` makes the tag itself,
+  # pointed at the checked-out main.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (must be v<VERSION>, e.g. v0.4.0)"
+        required: true
 
 permissions:
   contents: write
@@ -21,7 +30,7 @@ jobs:
 
       - name: Tag must match the VERSION file (catches a forgotten version bump)
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           want="v$(cat VERSION)"
           if [[ "$TAG" != "$want" ]]; then
@@ -38,9 +47,13 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
+          # On dispatch there is no tag yet; --target makes gh create it at
+          # the checked-out commit. On tag pushes the tag already exists and
+          # --target is ignored.
           gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
             dist/zbx-install.sh \
             dist/SHA256SUMS \
             install.sh \
