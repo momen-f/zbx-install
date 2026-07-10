@@ -4,10 +4,17 @@
 
 A single Bash script that takes a bare Linux server to a fully running,
 verified [Zabbix](https://www.zabbix.com/) stack — interactively or fully
-unattended.
+unattended. Agents install on macOS too, and on Windows via a native
+PowerShell one-liner.
 
 ```sh
+# Linux and macOS:
 curl -fsSL https://raw.githubusercontent.com/momen-f/zbx-install/main/install.sh | bash
+```
+
+```powershell
+# Windows (elevated PowerShell) — agent only:
+irm https://github.com/momen-f/zbx-install/releases/latest/download/install.ps1 | iex
 ```
 
 It detects your OS, recommends a stack (Zabbix version, database, web
@@ -54,7 +61,8 @@ or see [SPEC.md](SPEC.md) §7 (CLI) and Appendix A (`--config` file format).
 | RHEL-like (RHEL, CentOS Stream, Rocky, AlmaLinux, Oracle Linux) | 8, 9 | dnf |
 | Amazon Linux | 2023 | dnf |
 | SUSE (SLES, openSUSE Leap) | SLES 15 SP5+, Leap 15.6 | zypper |
-| macOS (Apple Silicon) | agent only (7.0 / 7.4) | .pkg |
+| macOS (Apple Silicon + Intel) | agent only (7.0 / 7.4) | .pkg / tar.gz |
+| Windows (10 / Server 2016+) | agent only (7.0 / 7.4), via `install.ps1` | MSI |
 
 Offers Zabbix `7.0` (LTS, default) and `7.4` (current stable). Full detail
 in [SPEC.md](SPEC.md) §4.
@@ -71,6 +79,27 @@ curl -fsSLO https://github.com/momen-f/zbx-install/releases/latest/download/zbx-
 chmod +x zbx-install.sh
 ./zbx-install.sh
 ```
+
+### Windows agent (`install.ps1`)
+
+`iex` can't forward parameters — to pass any, wrap the download in a
+scriptblock (or download the file first and run it):
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/momen-f/zbx-install/releases/latest/download/install.ps1))) -Server 192.0.2.10 -Yes
+```
+
+| Parameter | What it does |
+|---|---|
+| `-Server IP` | Zabbix server the agent reports to (default `127.0.0.1`) |
+| `-ZbxVersion 7.0\|7.4` | Zabbix major version (default `7.0` LTS) |
+| `-Agent2` | install Zabbix agent 2 instead of the classic `zabbix_agentd` |
+| `-Uninstall` | remove a previously installed agent |
+| `-Yes` | skip the confirmation prompt |
+| `-DryRun` | print the plan and every action without changing anything |
+
+The MSI comes straight from `cdn.zabbix.com` and is refused unless its
+Authenticode signature is valid and issued to Zabbix.
 
 ## Development
 
