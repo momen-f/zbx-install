@@ -129,3 +129,21 @@ macos_agent_run() {
   macos_agent_service
   macos_agent_health || true
 }
+
+# macos_agent_uninstall — remove what the .pkg installed: stop + unload the
+# LaunchDaemon, delete the binaries/config, and forget any zabbix pkg receipts.
+# Best-effort (each step logged via run()); only touches Zabbix-owned paths.
+# main() routes --uninstall here on macOS in place of the Linux uninstall_run.
+macos_agent_uninstall() {
+  run launchctl bootout system "$ZBX_MACOS_AGENT_PLIST" || true
+  run rm -f "$ZBX_MACOS_AGENT_PLIST" \
+    /usr/local/sbin/zabbix_agentd /usr/local/bin/zabbix_get /usr/local/bin/zabbix_sender
+  run rm -rf /usr/local/etc/zabbix
+  if [[ "$DRY_RUN" != "1" ]]; then
+    local pid
+    for pid in $(pkgutil --pkgs 2>/dev/null | grep -i zabbix || true); do
+      run pkgutil --forget "$pid" || true
+    done
+  fi
+  printf 'Removed the Zabbix macOS agent (binaries, config, LaunchDaemon).\n'
+}

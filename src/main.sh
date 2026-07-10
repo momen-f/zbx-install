@@ -791,7 +791,11 @@ main() {
     # Needs DETECT_PKGMGR/DETECT_FAMILY, but none of the install-flow guards
     # or recommendation apply to removing an existing install.
     detect_run
-    uninstall_run
+    if [[ "$DETECT_OS_ID" == "macos" ]]; then
+      macos_agent_uninstall
+    else
+      uninstall_run
+    fi
     exit 0
   fi
   resume_check

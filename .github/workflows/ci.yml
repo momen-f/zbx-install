@@ -379,3 +379,13 @@ jobs:
           test "$ok" = "1"
           echo "=== installer reported success ==="
           grep -q "Plan (macOS agent)" /tmp/install.out
+
+      - name: --uninstall removes the agent
+        run: |
+          sudo "$BASH_BIN" dist/zbx-install.sh --uninstall --yes --no-color
+          sleep 2
+          echo "=== binary + LaunchDaemon gone ==="
+          ! test -x /usr/local/sbin/zabbix_agentd
+          ! test -f /Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist
+          echo "=== no longer listening on 10050 ==="
+          ! (sudo lsof -nP -iTCP:10050 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN)

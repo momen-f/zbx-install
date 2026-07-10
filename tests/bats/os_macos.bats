@@ -70,3 +70,12 @@ dprobe() {
   dprobe 'PLAN_ZBX_VERSION=7.4 PLAN_ZBX_SERVER_IP=192.0.2.10; macos_agent_run'
   [ "$status" -eq 0 ]
 }
+
+@test "macos_agent_uninstall (dry-run) unloads the daemon and removes the files" {
+  dprobe 'macos_agent_uninstall'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"+ launchctl"* ]]
+  [[ "$output" == *"com.zabbix.zabbix_agentd.plist"* ]]
+  [[ "$output" == *"+ rm"* ]]
+  [[ "$output" == *"Removed the Zabbix macOS agent"* ]]
+}
