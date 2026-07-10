@@ -403,3 +403,50 @@ jobs:
           test -n "$url"
           echo "=== probing $url ==="
           curl -fsIL "$url" >/dev/null
+
+  # Windows agent acceptance: a REAL install of the official Zabbix agent MSI
+  # via the native install.ps1 — the only way to run zbx-install on Windows
+  # (no bash). Covers both the classic agentd (default) and agent2, plus
+  # uninstall, and doubles as the live verification of the CDN MSI URL shape.
+  windows-agent:
+    runs-on: windows-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PSScriptAnalyzer lint
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $findings = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error
+          $findings | Format-Table -AutoSize
+          if ($findings) { exit 1 }
+
+      - name: Pester unit tests
+        run: |
+          Install-Module Pester -Force -Scope CurrentUser -SkipPublisherCheck
+          Invoke-Pester tests/pester -CI
+
+      - name: Real agent install (classic zabbix_agentd)
+        run: ./install.ps1 -Server 127.0.0.1 -Yes
+
+      - name: Verify service running and listening on 10050
+        run: |
+          Get-Service 'Zabbix Agent*' | Format-Table -AutoSize
+          if (-not (Get-Service 'Zabbix Agent*' | Where-Object Status -eq Running)) { exit 1 }
+          if (-not (Get-NetTCPConnection -LocalPort 10050 -State Listen -ErrorAction SilentlyContinue)) { exit 1 }
+
+      - name: -Uninstall removes the agent
+        run: |
+          ./install.ps1 -Uninstall -Yes
+          if (Get-Service 'Zabbix Agent*' -ErrorAction SilentlyContinue) { exit 1 }
+
+      - name: Agent2 install/uninstall round-trip
+        run: |
+          ./install.ps1 -Agent2 -Server 127.0.0.1 -Yes
+          if (-not (Get-Service 'Zabbix Agent*' | Where-Object Status -eq Running)) { exit 1 }
+          ./install.ps1 -Uninstall -Yes
+          if (Get-Service 'Zabbix Agent*' -ErrorAction SilentlyContinue) { exit 1 }
+
+      - name: Surface the msiexec log on failure
+        if: failure()
+        run: Get-Content "$env:TEMP\zbx-agent-msi.log" -Tail 100 -ErrorAction SilentlyContinue

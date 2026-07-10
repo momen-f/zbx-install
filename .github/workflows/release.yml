@@ -44,5 +44,6 @@ jobs:
             dist/zbx-install.sh \
             dist/SHA256SUMS \
             install.sh \
+            install.ps1 \
             --title "$TAG" \
             --generate-notes
