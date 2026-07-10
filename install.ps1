@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    zbx-install for Windows — installs the official Zabbix agent MSI,
+    zbx-install for Windows - installs the official Zabbix agent MSI,
     agent-only (the Windows analog of the bash installer's --agent-only /
     macOS flow; Zabbix ships no Windows server/proxy/frontend).
 
@@ -21,10 +21,10 @@
 
 .PARAMETER Server
     IP/DNS of the Zabbix server the agent reports to (Server + ServerActive).
-    Default 127.0.0.1 — mirrors the bash installer's --server.
+    Default 127.0.0.1 - mirrors the bash installer's --server.
 
 .PARAMETER ZbxVersion
-    Zabbix major version: 7.0 (LTS, default — matches ZBX_DEFAULT_VERSION
+    Zabbix major version: 7.0 (LTS, default - matches ZBX_DEFAULT_VERSION
     in the bash installer) or 7.4.
 
 .PARAMETER Agent2
@@ -44,8 +44,8 @@
 
 .NOTES
     Exit codes match the bash installer's conventions:
-      0 ok · 2 usage/confirmation declined · 3 unsupported platform ·
-      4 not elevated · 5 download/verify/install failed · 6 health check failed
+      0 ok | 2 usage/confirmation declined | 3 unsupported platform |
+      4 not elevated | 5 download/verify/install failed | 6 health check failed
 #>
 [CmdletBinding()]
 param(
@@ -63,7 +63,7 @@ $ErrorActionPreference = 'Stop'
 
 $ZbxCdn = 'https://cdn.zabbix.com/zabbix/binaries/stable'
 
-# Get-ZbxArch — map the machine arch to the token Zabbix uses in MSI names.
+# Get-ZbxArch - map the machine arch to the token Zabbix uses in MSI names.
 # Pure; the Windows analog of _macos_arch. Fails on an arch Zabbix does not
 # build for (32-bit Windows is not offered).
 function Get-ZbxArch {
@@ -75,7 +75,7 @@ function Get-ZbxArch {
     }
 }
 
-# Get-ZbxMsiUrl — pure: the self-updating "latest" MSI URL, same CDN pointer
+# Get-ZbxMsiUrl - pure: the self-updating "latest" MSI URL, same CDN pointer
 # shape as the macOS module's zbx_macos_agent_url.
 function Get-ZbxMsiUrl {
     param(
@@ -93,7 +93,7 @@ function Test-Admin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Test-ZbxSignature — the MSI must carry a VALID Authenticode signature whose
+# Test-ZbxSignature - the MSI must carry a VALID Authenticode signature whose
 # subject is Zabbix (mirrors the pkgutil --check-signature gate on macOS).
 function Test-ZbxSignature {
     param([Parameter(Mandatory)][string]$Path)
@@ -109,7 +109,7 @@ function Test-ZbxSignature {
     $true
 }
 
-# Find-ZbxProduct — registry Uninstall entries for an installed Zabbix agent
+# Find-ZbxProduct - registry Uninstall entries for an installed Zabbix agent
 # (either variant, both registry views). Returns objects with DisplayName +
 # the msiexec product code (PSChildName).
 function Find-ZbxProduct {
@@ -246,7 +246,7 @@ function Invoke-ZbxMain {
 }
 
 # Only auto-run outside Pester (tests dot-source this file to unit-test the
-# functions — the PowerShell equivalent of the bats mprobe/dprobe pattern).
+# functions - the PowerShell equivalent of the bats mprobe/dprobe pattern).
 if (-not $MyInvocation.MyCommand.Path -or $MyInvocation.InvocationName -ne '.') {
     Invoke-ZbxMain
 }

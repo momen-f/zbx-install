@@ -402,7 +402,9 @@ jobs:
           url="$(grep -o 'https://cdn.zabbix.com[^ ]*macos-amd64[^ ]*\.tar\.gz' /tmp/intel-dryrun.out | head -1)"
           test -n "$url"
           echo "=== probing $url ==="
-          curl -fsIL "$url" >/dev/null
+          # cdn.zabbix.com resets plain HEAD requests (curl exit 56), so probe
+          # with a 1-byte ranged GET instead — -f still fails loudly on a 404.
+          curl -fsSL -r 0-0 -o /dev/null "$url"
 
   # Windows agent acceptance: a REAL install of the official Zabbix agent MSI
   # via the native install.ps1 — the only way to run zbx-install on Windows
@@ -417,7 +419,11 @@ jobs:
       - name: PSScriptAnalyzer lint
         run: |
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-          $findings = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error
+          # Write-Host is deliberate (interactive installer talking to a
+          # console); PSReviewUnusedParameter false-positives on script params
+          # that are only read inside functions.
+          $findings = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error `
+            -ExcludeRule PSAvoidUsingWriteHost,PSReviewUnusedParameter
           $findings | Format-Table -AutoSize
           if ($findings) { exit 1 }
 
