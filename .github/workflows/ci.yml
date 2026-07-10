@@ -401,6 +401,11 @@ jobs:
           grep -q "tar.gz archive" /tmp/intel-dryrun.out
           url="$(grep -o 'https://cdn.zabbix.com[^ ]*macos-amd64[^ ]*\.tar\.gz' /tmp/intel-dryrun.out | head -1)"
           test -n "$url"
+          echo "=== what the CDN actually publishes (diagnostic on URL-shape drift) ==="
+          curl -fsSL "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/latest/" \
+            | grep -oE 'zabbix_agent[^"<]*' | sort -u || true
+          curl -fsSL "https://cdn.zabbix.com/zabbix/binaries/stable/7.0/" \
+            | grep -oE 'href="[^"]*"' | tail -20 || true
           echo "=== probing $url ==="
           # cdn.zabbix.com resets plain HEAD requests (curl exit 56), so probe
           # with a 1-byte ranged GET instead — -f still fails loudly on a 404.
