@@ -124,6 +124,11 @@ log() {
 # Returns the command's exit status so callers can route failures to err_menu.
 run() {
   local shown rc
+  # The global IFS is $'\n\t' (no space), so a bare "$*" joins argv with
+  # NEWLINES — one log line per argument, which makes the "RUN:" entries
+  # ungreppable and lets core_tail_log show argv fragments instead of the
+  # command and its error. Same guard as pkg.sh/ui.sh/health.sh.
+  local IFS=' '
   shown="$(core_redact <<<"$*")"
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '  + %s\n' "$shown"
@@ -134,8 +139,17 @@ run() {
   # The command's OWN output is piped through core_redact too, not just the
   # announced command line — a DB client echoing a bad statement back (e.g.
   # a syntax error near a password literal) must not leak it into the log.
-  "$@" 2>&1 | core_redact >>"$LOG_FILE"
-  rc="${PIPESTATUS[0]}"
+  # Only wire up that pipe when the log is actually appendable: if it is not
+  # (disk full, log unlinked under us), core_redact's redirection fails and it
+  # exits at once, the command takes SIGPIPE on its first write, and
+  # PIPESTATUS[0] reports 141 for a command that SUCCEEDED.
+  if { : >>"$LOG_FILE"; } 2>/dev/null; then
+    "$@" 2>&1 | core_redact >>"$LOG_FILE"
+    rc="${PIPESTATUS[0]}"
+  else
+    "$@" >/dev/null 2>&1
+    rc=$?
+  fi
   return "$rc"
 }
 
@@ -209,9 +223,26 @@ core_tail_log() {
 # die MSG CODE — unattended-only hard stop (menus are impossible). §14.
 die() {
   local msg="$1" code="${2:-1}"
-  log ERROR "$msg"
-  printf '%s✗ %s%s\n' "$C_RED" "$msg" "$C_RESET" >&2
-  [[ -n "$LOG_FILE" ]] && printf 'See log: %s\n' "$LOG_FILE" >&2
+  # Redacted here too: log()'s copy goes through core_redact, but this one
+  # interpolates caller text (err_menu passes a step's raw reason).
+  printf '%s✗ %s%s\n' "$C_RED" "$(core_redact <<<"$msg")" "$C_RESET" >&2
+  if [[ -n "$LOG_FILE" ]]; then
+    # A bare "See log: ..." leaves the user to go dig out the reason, and a
+    # hard stop has no err_menu to press [l] in. err_menu already shows the
+    # last lines before its menu — do the same here so every stop is
+    # diagnosable from the terminal alone. Safe to print: everything written
+    # to the log goes through core_redact.
+    local n="${ZBX_DIE_TAIL:-12}"
+    printf '%s--- last %s lines of %s ---%s\n' "$C_YELLOW" "$n" "$LOG_FILE" "$C_RESET" >&2
+    # `|| true` is load-bearing under set -Eeuo pipefail: core_tail_log ends
+    # in `[[ -f ... ]] && tail`, so a set-but-missing log would fire the ERR
+    # trap and lose the documented exit code to a cosmetic tail.
+    core_tail_log "$n" >&2 || true
+    printf 'Full log: %s\n' "$LOG_FILE" >&2
+  fi
+  # Logged LAST, with log()'s stderr copy dropped: the ✗ line above already
+  # said it, and printing both is why every die() appeared twice on screen.
+  log ERROR "$msg" 2>/dev/null
   exit "$code"
 }
 

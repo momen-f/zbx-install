@@ -188,6 +188,16 @@ detect_arch() {
 
 # --- hardware / disk (host) --------------------------------------------------
 detect_hw() {
+  if [[ "$DETECT_OS_ID" == "macos" ]]; then
+    # Darwin has no /proc and no nproc; sysctl carries the same two facts.
+    local bytes ncpu
+    bytes="$(sysctl -n hw.memsize 2>/dev/null || true)"
+    [[ "$bytes" =~ ^[0-9]+$ ]] && DETECT_RAM_MB=$((bytes / 1024 / 1024))
+    ncpu="$(sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || true)"
+    [[ "$ncpu" =~ ^[0-9]+$ ]] && DETECT_CPU="$ncpu"
+    : "${DETECT_RAM_MB:=0}" "${DETECT_CPU:=0}"
+    return 0
+  fi
   # MEMINFO_FILE override exists for bats fixtures, same spirit as
   # OS_RELEASE_FILE (§8).
   local mi="${MEMINFO_FILE:-/proc/meminfo}"
@@ -202,8 +212,13 @@ detect_hw() {
   : "${DETECT_RAM_MB:=0}" "${DETECT_CPU:=0}"
 }
 
+# _disk_avail_gb PATH — GiB available, or "" when df cannot answer. Keyed off
+# the "Available" column by position from the END of the row ($(NF-2)), not
+# $4: BSD df wraps a long device name onto its own line, which shifts the
+# fields on GNU df and makes a fixed $4 read the wrong column.
 _disk_avail_gb() {
-  df -Pk "$1" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}'
+  df -Pk "$1" 2>/dev/null |
+    awk 'NR>1 && NF>=4 {print int($(NF-2)/1024/1024); exit}'
 }
 
 detect_disk() {
@@ -290,8 +305,18 @@ detect_firewall() {
   fi
 }
 
+# _port_listening PORT — true when something is listening on it. ss on Linux;
+# lsof on macOS, which has no ss (os_macos.sh's health check uses lsof too).
+_port_listening() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
+  else
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  fi
+}
+
 detect_ports() {
-  if ! command -v ss >/dev/null 2>&1; then
+  if ! command -v ss >/dev/null 2>&1 && ! command -v lsof >/dev/null 2>&1; then
     DETECT_PORT_CONFLICTS="unknown"
     return 0
   fi
@@ -300,7 +325,7 @@ detect_ports() {
   # when that DB engine is actually being newly installed, which is decided
   # later (recommend.sh) — plan_port_warnings does that filtering.
   for p in 80 443 10050 10051 3306 5432; do
-    if ss -ltnH "sport = :$p" 2>/dev/null | grep -q .; then
+    if _port_listening "$p"; then
       conflicts+=("$p")
     fi
   done
@@ -330,10 +355,31 @@ detect_run() {
   detect_arch
   if [[ "$DETECT_OS_ID" == "macos" ]]; then
     # macOS is agent-only: the classic zabbix_agentd from a signed .pkg, no
-    # apt/dnf/systemd/SELinux/firewalld. Skip the Linux-only probes and leave
-    # their DETECT_* fields at their initialized defaults.
+    # apt/dnf/systemd/SELinux/firewalld and no ss. Those Linux-only probes stay
+    # skipped — but RAM, CPU, disk, listening ports and an existing agent are
+    # real, measurable facts here. Leaving them at their initialized defaults
+    # printed "0 MB / 0 vCPU", "0 GiB free" and "Existing Zabbix: no" as if
+    # they had been measured; the report has no way to render "not measured"
+    # differently from "measured as zero", so it stated falsehoods.
     DETECT_PKGMGR="pkg"
     DETECT_PKGMGR_OK="yes"
+    detect_hw
+    detect_disk
+    # The .pkg leaves a receipt and /usr/local/sbin/zabbix_agentd; neither
+    # `command -v` nor systemctl can see it (sudo's secure_path excludes
+    # /usr/local/sbin), so test the receipt and the path directly. The rest of
+    # detect_existing probes mysql/httpd/nginx, which are meaningless here —
+    # and /usr/sbin/httpd ships with macOS, so it would report a web server on
+    # a Mac that has never run one.
+    if pkgutil --pkgs 2>/dev/null | grep -qi zabbix ||
+      [[ -x /usr/local/sbin/zabbix_agentd ]]; then
+      DETECT_ZBX_PRESENT="yes"
+    fi
+    detect_ports
+    # socketfilterfw/pf are not probed; "none" would claim a fact we never
+    # checked. Nothing on the macOS path consumes this (firewall.sh and the
+    # recommend rows are behind the Linux flow).
+    DETECT_FIREWALL="unknown"
   else
     detect_pkgmgr
     detect_hw

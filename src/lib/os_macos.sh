@@ -51,12 +51,36 @@ zbx_macos_agent_url() {
 : "${ZBX_MACOS_AGENT_PLIST:=/Library/LaunchDaemons/com.zabbix.zabbix_agentd.plist}"
 readonly ZBX_MACOS_AGENT_LABEL="com.zabbix.zabbix_agentd"
 
+# _macos_curl_reason RC — curl's exit code as a sentence a human can act on.
+# curl already runs with -fsSL (the S is --show-error), so curl's own message
+# lands in the log via run(); this is what gets said on the CONSOLE, where the
+# user actually is.
+_macos_curl_reason() {
+  case "$1" in
+    6) printf 'DNS lookup for cdn.zabbix.com failed' ;;
+    7) printf 'could not connect to cdn.zabbix.com' ;;
+    18) printf 'the transfer ended early — the connection dropped mid-download' ;;
+    22) printf 'the CDN returned an HTTP error (404/403/5xx)' ;;
+    23) printf 'could not write the downloaded file to disk' ;;
+    28) printf 'the download timed out' ;;
+    35 | 60 | 77) printf 'the TLS handshake failed — something is intercepting HTTPS' ;;
+    56) printf 'the connection was reset mid-transfer — a proxy, VPN or content filter cut it' ;;
+    *) printf 'curl failed' ;;
+  esac
+}
+
 # macos_agent_install — download the signed .pkg and install it. run() makes
 # every system command DRY_RUN-aware. Integrity is the .pkg's Apple Developer
 # ID signature (verified to be Zabbix's), not a hash: the self-updating
 # "latest" build has no stable checksum to pin.
+#
+# The download is ~12 MB over a single TLS connection — the exact traffic shape
+# that filtering middleboxes and flaky links cut mid-transfer — so it is
+# bounded by timeouts and retried with -C - (resume), and every failure says
+# which of the three steps failed and why. A one-line-per-step bare `return 1`
+# used to make all three indistinguishable to the caller.
 macos_agent_install() {
-  local url pkg base
+  local url pkg base rc=0 attempt bytes="" magic sig chain
   url="$(zbx_macos_agent_url "$PLAN_ZBX_VERSION" arm64 openssl)"
   # installer(8) validates the extension and rejects a path not ending in
   # .pkg ("package path specified was invalid"); BSD mktemp can't add a suffix,
@@ -65,14 +89,55 @@ macos_agent_install() {
   pkg="${base}.pkg"
   ZBX_TEMPFILES+=("$base" "$pkg")
   log INFO "macOS agent package: $url"
-  run curl -fsSL -o "$pkg" "$url" || return 1
+  for attempt in 1 2 3; do
+    rc=0
+    # -w appends a transfer summary that run() folds into the log, so the log
+    # records http=/bytes= even when curl's own message is vague. -C - resumes
+    # a partial file (a no-op at offset 0); the CDN serves ranges.
+    run curl -fsSL --connect-timeout 15 --max-time 900 -C - \
+      -w 'curl: http=%{http_code} bytes=%{size_download} time=%{time_total}s\n' \
+      -o "$pkg" "$url" || rc=$?
+    ((rc == 0)) && break
+    bytes="$(wc -c <"$pkg" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    log WARN "agent download attempt ${attempt}/3 failed (curl exit ${rc}, ${bytes:-0} bytes so far)"
+    # An explicit loop rather than curl's --retry: the errors this guards
+    # against (18 partial, 56 reset) are not in curl's transient set on older
+    # curls, so --retry alone would not retry them.
+    if ((attempt < 3)); then sleep 3; fi
+  done
+  if ((rc != 0)); then
+    log ERROR "downloading the agent package failed: $(_macos_curl_reason "$rc") (curl exit $rc) — $url"
+    return 1
+  fi
   if [[ "$DRY_RUN" != "1" ]]; then
-    if ! pkgutil --check-signature "$pkg" 2>/dev/null | grep -qi 'zabbix'; then
-      log ERROR "macOS agent package is not signed by Zabbix — refusing to install"
+    bytes="$(wc -c <"$pkg" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    # A flat .pkg is a xar archive. An HTML error page, a captive-portal login
+    # or an empty 200 body all satisfy `curl -f` and fail here. Checked BEFORE
+    # pkgutil on purpose: pkgutil's "could not open package" would otherwise be
+    # reported as "not signed by Zabbix", sending the user after the wrong bug.
+    magic="$(head -c 4 "$pkg" 2>/dev/null || true)"
+    if [[ "$magic" != 'xar!' ]]; then
+      log ERROR "the downloaded file is not a macOS package (${bytes:-0} bytes, magic '${magic}') — $url"
+      return 1
+    fi
+    # Captured, not piped into `grep -q`: under pipefail (core.sh) a grep that
+    # matches and exits early can SIGPIPE pkgutil, so the pipeline returns 141
+    # and a correctly signed package is rejected. Capturing also keeps
+    # pkgutil's own stderr instead of discarding the real reason.
+    sig="$(pkgutil --check-signature "$pkg" 2>&1)" || true
+    log INFO "pkgutil --check-signature: $sig"
+    # Match below the first line only: pkgutil echoes the package path there,
+    # so a whole-output match could be satisfied by the temp filename alone.
+    if [[ "$sig" == *$'\n'* ]]; then chain="${sig#*$'\n'}"; else chain=""; fi
+    if [[ "$(printf '%s' "$chain" | tr '[:upper:]' '[:lower:]')" != *zabbix* ]]; then
+      log ERROR "macOS agent package is not signed by Zabbix — refusing to install (pkgutil: ${sig%%$'\n'*})"
       return 1
     fi
   fi
-  run installer -pkg "$pkg" -target / || return 1
+  run installer -pkg "$pkg" -target / || {
+    log ERROR "installer(8) refused the package (${bytes:-unknown} bytes from $url) — its output is in the log above"
+    return 1
+  }
 }
 
 # macos_agent_config — point the agent at its server. The .pkg seeds
@@ -125,7 +190,9 @@ macos_agent_health() {
 # The health result is recorded (not propagated); macos_main_flow reads the
 # summary to decide the exit code.
 macos_agent_run() {
-  macos_agent_install || die "macOS agent download/install failed — see ${LOG_FILE}" 5
+  # macos_agent_install has already logged an ERROR naming the step that failed
+  # and why; die() prints the log tail, so that reason is on screen above this.
+  macos_agent_install || die "macOS agent installation failed (reason above)" 5
   macos_agent_config || die "configuring the macOS agent failed — see ${LOG_FILE}" 5
   macos_agent_service
   macos_agent_health || true
