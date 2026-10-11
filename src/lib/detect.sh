@@ -37,7 +37,7 @@ DETECT_OS_ID="" DETECT_OS_LIKE="" DETECT_OS_VERSION="" DETECT_OS_MAJOR=""
 DETECT_OS_NAME="" DETECT_FAMILY="unknown" DETECT_SUPPORTED="no"
 DETECT_PKGMGR="" DETECT_PKGMGR_OK="no" DETECT_ARCH="" DETECT_ARCH_OK="no"
 DETECT_RAM_MB=0 DETECT_CPU=0 DETECT_DISK_VAR_GB=0 DETECT_DISK_ROOT_GB=0
-DETECT_DISK_WARN="no" DETECT_NET_OK="unknown" DETECT_ZBX_PRESENT="no"
+DETECT_DISK_WARN="no" DETECT_DISK_OK="yes" DETECT_NET_OK="unknown" DETECT_ZBX_PRESENT="no"
 DETECT_DB_PRESENT="none" DETECT_WEB_PRESENT="none" DETECT_SELINUX="absent"
 DETECT_FIREWALL="none" DETECT_PORT_CONFLICTS="none" DETECT_VIRT="none"
 DETECT_IS_CONTAINER="no" DETECT_FW_NOTE=""
@@ -217,15 +217,26 @@ detect_hw() {
 # $4: BSD df wraps a long device name onto its own line, which shifts the
 # fields on GNU df and makes a fixed $4 read the wrong column.
 _disk_avail_gb() {
+  # `|| true`: df can fail outright (a restricted container, an unreadable
+  # mount table). A nice-to-have probe must never abort the install through
+  # the ERR trap — the caller reads empty output as "could not measure".
   df -Pk "$1" 2>/dev/null |
-    awk 'NR>1 && NF>=4 {print int($(NF-2)/1024/1024); exit}'
+    awk 'NR>1 && NF>=4 {print int($(NF-2)/1024/1024); exit}' || true
 }
 
 detect_disk() {
   DETECT_DISK_VAR_GB="$(_disk_avail_gb /var)"
   DETECT_DISK_ROOT_GB="$(_disk_avail_gb /)"
+  # Empty means df could not answer. Report that rather than printing 0 as
+  # though it had been measured, and never raise a low-disk warning against a
+  # number that was never read.
+  if [[ -z "$DETECT_DISK_VAR_GB" && -z "$DETECT_DISK_ROOT_GB" ]]; then
+    DETECT_DISK_OK="no"
+  fi
   : "${DETECT_DISK_VAR_GB:=0}" "${DETECT_DISK_ROOT_GB:=0}"
-  ((DETECT_DISK_VAR_GB < 10)) && DETECT_DISK_WARN="yes"
+  if [[ "$DETECT_DISK_OK" == "yes" ]] && ((DETECT_DISK_VAR_GB < 10)); then
+    DETECT_DISK_WARN="yes"
+  fi
   return 0
 }
 
@@ -396,7 +407,7 @@ detect_run() {
   readonly DETECT_OS_ID DETECT_OS_LIKE DETECT_OS_VERSION DETECT_OS_MAJOR \
     DETECT_OS_NAME DETECT_FAMILY DETECT_SUPPORTED DETECT_PKGMGR DETECT_PKGMGR_OK \
     DETECT_ARCH DETECT_ARCH_OK DETECT_RAM_MB DETECT_CPU DETECT_DISK_VAR_GB \
-    DETECT_DISK_ROOT_GB DETECT_DISK_WARN DETECT_ZBX_PRESENT \
+    DETECT_DISK_ROOT_GB DETECT_DISK_WARN DETECT_DISK_OK DETECT_ZBX_PRESENT \
     DETECT_DB_PRESENT DETECT_WEB_PRESENT DETECT_SELINUX DETECT_FIREWALL \
     DETECT_PORT_CONFLICTS DETECT_VIRT DETECT_IS_CONTAINER DETECT_FW_NOTE
   log INFO "detected: ${DETECT_OS_ID} ${DETECT_OS_VERSION} (${DETECT_FAMILY}), pkgmgr=${DETECT_PKGMGR}, arch=${DETECT_ARCH}, supported=${DETECT_SUPPORTED}"
@@ -420,7 +431,11 @@ detect_report() {
   ui_row "Pkg manager:" "${DETECT_PKGMGR:-none} (ok=${DETECT_PKGMGR_OK})"
   ui_row "Arch:" "${DETECT_ARCH} (ok=${DETECT_ARCH_OK})" "$arch_color"
   ui_row "RAM / CPU:" "${DETECT_RAM_MB} MB / ${DETECT_CPU} vCPU"
-  ui_row "Disk /var,/:" "${DETECT_DISK_VAR_GB},${DETECT_DISK_ROOT_GB} GiB free" "$disk_color"
+  if [[ "$DETECT_DISK_OK" == "yes" ]]; then
+    ui_row "Disk /var,/:" "${DETECT_DISK_VAR_GB},${DETECT_DISK_ROOT_GB} GiB free" "$disk_color"
+  else
+    ui_row "Disk /var,/:" "unknown (df gave no answer)"
+  fi
   ui_row "Repo reachable:" "$DETECT_NET_OK" "$net_color"
   ui_row "Existing Zabbix:" "$DETECT_ZBX_PRESENT"
   ui_row "Existing DB:" "$DETECT_DB_PRESENT"
