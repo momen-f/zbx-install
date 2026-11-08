@@ -19,6 +19,70 @@
 # environment with Remi already configured just works), and only adds the
 # Remi hint to the error message if a frontend install on EL8 actually fails.
 
+# --- PHP version floor for the frontend ---------------------------------------
+# A Zabbix frontend enforces a PHP minimum at RUN time that its packages do
+# NOT declare: the RPMs require only php-mysqlnd, so dnf installs happily
+# against a too-old PHP and every page then answers HTTP 200 with the plain
+# text "Minimum required PHP version is 8.2.0." — correct content type HTML,
+# clean web-server logs, services all active. Found on rocky 9 + Zabbix 8.0
+# (CI, 2026-11-08), where the symptom was an API that simply never answered.
+#
+# _zbx_php_min_version MAJOR — the floor, by Zabbix major. Verified from the
+# frontend's own refusal message; keep it in step when a major is added.
+_zbx_php_min_version() {
+  case "$1" in
+    8.0) printf '8.2' ;;
+    *) printf '8.0' ;;
+  esac
+}
+
+# _ver_ge A B — true when version A >= B, compared as major.minor numbers.
+_ver_ge() {
+  local a_maj="${1%%.*}" b_maj="${2%%.*}" a_min b_min
+  a_min="${1#*.}"
+  a_min="${a_min%%.*}"
+  b_min="${2#*.}"
+  b_min="${b_min%%.*}"
+  ((a_maj > b_maj)) && return 0
+  ((a_maj < b_maj)) && return 1
+  ((a_min >= b_min))
+}
+
+# pkg_php_module_enable — on RHEL-family, switch to a native php module stream
+# new enough for the planned frontend, BEFORE the packages are installed.
+# Same call as db_mysql_module_enable: selecting a stream from the distro's
+# own AppStream is routine. This is deliberately not the EL8/Remi case below —
+# that needs a THIRD-PARTY repo, which stays a hint rather than an action.
+# A no-op when the enabled stream is already new enough, when the distro
+# ships no new-enough stream (EL8), or off RHEL entirely.
+pkg_php_module_enable() {
+  [[ "$DETECT_PKGMGR" == "dnf" ]] || return 0
+  plan_has frontend || return 0
+  local want enabled stream best=""
+  want="$(_zbx_php_min_version "$PLAN_ZBX_VERSION")"
+  enabled="$(dnf module list --enabled php 2>/dev/null | awk '$1 == "php" {print $2; exit}' || true)"
+  if [[ -n "$enabled" ]] && _ver_ge "$enabled" "$want"; then
+    log INFO "php module stream $enabled already satisfies Zabbix $PLAN_ZBX_VERSION (needs >= $want)"
+    return 0
+  fi
+  # Lowest available stream that clears the floor: newer than required is a
+  # bigger change to the user's system than the job calls for.
+  while read -r stream; do
+    [[ -n "$stream" ]] || continue
+    _ver_ge "$stream" "$want" || continue
+    if [[ -z "$best" ]] || ! _ver_ge "$stream" "$best"; then best="$stream"; fi
+  done < <(dnf module list php 2>/dev/null | awk '$1 == "php" {print $2}' || true)
+  if [[ -z "$best" ]]; then
+    # EL8 lands here: no native stream >= 8.0. Leave it to dnf and to
+    # _pkg_failure_hint, which already names Remi.
+    log WARN "no native php module stream >= $want is available — the Zabbix $PLAN_ZBX_VERSION frontend needs PHP >= ${want}.0 and may refuse to run"
+    return 0
+  fi
+  log INFO "enabling php module stream $best (Zabbix $PLAN_ZBX_VERSION frontend needs PHP >= ${want}.0, enabled stream: ${enabled:-distro default})"
+  run dnf module reset php -y || true
+  run dnf module enable "php:${best}" -y || true
+}
+
 # --- system update (§11) ------------------------------------------------------
 # _pkg_count_installed — best-effort installed-package count, for the log
 # (§11). Purely informational: must never fail the update step just because
