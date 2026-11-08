@@ -284,8 +284,12 @@ fake_tool() {
   mkdir -p "$d"
   printf 'SELECT 1;\n' >"$d/plain.sql"
   printf 'SELECT 1;\n' | gzip >"$d/comp.sql.gz"
+  # The fake client must IGNORE its trailing database-name argument: the code
+  # under test runs "${_DB_MYSQL_ARGS[@]}" "$dbname", so a bare `tee -a FILE`
+  # here became `tee -a FILE zabbix` and wrote a file named "zabbix" into the
+  # current directory — the repo root — on every run.
   mrprobe 'DRY_RUN=0 LOG_FILE="'"$d"'/log"
-    _DB_MYSQL_ARGS=(tee -a "'"$d"'/fed")
+    _DB_MYSQL_ARGS=(sh -c "cat >>\"\$0\"" "'"$d"'/fed")
     _db_mysql_import_pipe "'"$d"'/plain.sql" zabbix
     _db_mysql_import_pipe "'"$d"'/comp.sql.gz" zabbix
     grep -c "SELECT 1" "'"$d"'/fed"'
