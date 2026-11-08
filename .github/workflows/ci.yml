@@ -243,6 +243,28 @@ jobs:
             cat /tmp/install.out
             echo "=== log tail (always shown) ==="
             tail -n 120 /var/log/zbx.log || true
+            if [ "$rc" -ne 0 ]; then
+              # The container dies with this step, so anything worth seeing has
+              # to be dumped here. The frontend is the part that fails in a way
+              # the installer cannot explain from the outside (an API that never
+              # answers looks identical whether httpd is down, the vhost is
+              # missing, or PHP is erroring).
+              echo "=== FAILED — frontend diagnostics ==="
+              systemctl is-active httpd php-fpm apache2 zabbix-server 2>&1 | head -10 || true
+              echo "--- what answers on :80 ---"
+              curl -sS -o /dev/null -w "GET /zabbix/ -> %{http_code}\n" http://127.0.0.1/zabbix/ || true
+              curl -sS -D- -o /dev/null -X POST -H "Content-Type: application/json" \
+                -d "{\"jsonrpc\":\"2.0\",\"method\":\"apiinfo.version\",\"params\":{},\"id\":0}" \
+                http://127.0.0.1/zabbix/api_jsonrpc.php 2>&1 | head -20 || true
+              echo "--- where the frontend actually lives ---"
+              ls -d /usr/share/zabbix* /usr/share/zabbix/ui 2>&1 | head -10 || true
+              ls /etc/httpd/conf.d/zabbix* /etc/apache2/conf-enabled/zabbix* 2>&1 | head -10 || true
+              echo "--- web server error log ---"
+              tail -n 40 /var/log/httpd/error_log 2>/dev/null ||
+                tail -n 40 /var/log/apache2/error.log 2>/dev/null || true
+              echo "--- php-fpm journal ---"
+              journalctl -u php-fpm --no-pager -n 30 2>/dev/null || true
+            fi
             test "$rc" -eq 0
             echo "=== verifying installed packages ==="
             ${{ matrix.verify }}

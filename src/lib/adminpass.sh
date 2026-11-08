@@ -65,7 +65,10 @@ _adminpass_json_field() {
 # install failed in CI on 2026-11-08, one second after the services step.
 # Polls like health.sh's port check (§13).
 _adminpass_api_ready() {
-  local tries="${ZBX_ADMIN_API_TRIES:-15}" i resp
+  # 30s, not health.sh's 15: that bound is for a port opening, while this
+  # waits for httpd + php-fpm to compile and serve a PHP application on its
+  # first ever request. On rocky 9 the API was still silent at 14s.
+  local tries="${ZBX_ADMIN_API_TRIES:-30}" i resp
   for ((i = 1; i <= tries; i++)); do
     # HTTP 200 alone is NOT readiness: a frontend still warming up answers
     # 200 with an empty body, and the login that follows then parses to an
