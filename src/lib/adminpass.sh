@@ -65,13 +65,17 @@ _adminpass_json_field() {
 # install failed in CI on 2026-11-08, one second after the services step.
 # Polls like health.sh's port check (§13).
 _adminpass_api_ready() {
-  local tries="${ZBX_ADMIN_API_TRIES:-15}" i
+  local tries="${ZBX_ADMIN_API_TRIES:-15}" i resp
   for ((i = 1; i <= tries; i++)); do
-    # Any HTTP 200 means PHP is serving: apiinfo.version needs no auth, and
-    # even a JSON-RPC error body would prove the endpoint is alive.
-    if curl -fsS -o /dev/null -X POST -H 'Content-Type: application/json' \
+    # HTTP 200 alone is NOT readiness: a frontend still warming up answers
+    # 200 with an empty body, and the login that follows then parses to an
+    # empty token and gets blamed on the credentials. Require a JSON-RPC
+    # reply. apiinfo.version needs no auth, and even its error body proves
+    # PHP is actually executing.
+    resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","method":"apiinfo.version","params":{},"id":0}' \
-      "$ZBX_ADMIN_API_URL" 2>/dev/null; then
+      "$ZBX_ADMIN_API_URL" 2>/dev/null || true)"
+    if [[ "$resp" == *'"jsonrpc"'* ]]; then
       return 0
     fi
     ((i < tries)) && sleep 1
@@ -100,7 +104,18 @@ _adminpass_login() {
     log WARN "admin-pass: the API refused the login: ${why:-$resp}"
     return 1
   fi
-  _adminpass_json_field "$resp" result
+  local token
+  token="$(_adminpass_json_field "$resp" result)"
+  if [[ -z "$token" ]]; then
+    # Neither a transport failure nor a refusal, yet no token: the response
+    # shape is not what we expect. Say exactly that, and show it — guessing
+    # "the password was already changed" from an unread body is how this step
+    # misdiagnosed itself twice. Truncated, and log() redacts registered
+    # secrets on the way out.
+    log WARN "admin-pass: the API returned no session token; response was: ${resp:0:300}"
+    return 1
+  fi
+  printf '%s' "$token"
 }
 
 # _adminpass_set_password TOKEN — userid 1 is always Admin's on a fresh
