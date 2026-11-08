@@ -32,10 +32,59 @@ readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4" "8.0")
 # and is a set because more than one offered version can be LTS at once.
 readonly ZBX_LTS_VERSIONS=("7.0" "8.0")
 # The version the recommendation engine defaults to. Deliberately NOT the
-# newest LTS yet: 8.0 reached GA on 2026-11-05 and nothing has installed it
-# end to end, so the default moves to it only once its real-install CI row
-# has been green.
+# newest LTS: 8.0 installs end to end in CI (ubuntu 24.04 and rocky 9, both
+# green 2026-11-08), but its frontend needs PHP >= 8.2, which Ubuntu 22.04
+# (php8.1) and RHEL 8 (php 7.4) cannot provide from their own repos — there
+# it would install cleanly and then refuse every request. 7.0 LTS runs on
+# every supported distro and is supported to 2027-06-30; 8.0 stays opt-in via
+# --zabbix-version 8.0, and the plan warns when the PHP floor cannot be met
+# (plan_report_warnings). Revisit when the supported list drops those distros.
 readonly ZBX_DEFAULT_VERSION="7.0"
+
+# --- PHP: the frontend's floor vs what the distro can provide ------------------
+# A Zabbix frontend enforces a PHP minimum at RUN time that its packages do not
+# declare (see pkg_php_module_enable in pkg.sh for how that surfaced). These
+# helpers let the plan warn BEFORE installing, and let pkg.sh pick a stream.
+#
+# _zbx_php_min_version MAJOR — the floor, by Zabbix major. Verified from the
+# frontend's own refusal message; keep it in step when a major is added.
+_zbx_php_min_version() {
+  case "$1" in
+    8.0) printf '8.2' ;;
+    *) printf '8.0' ;;
+  esac
+}
+
+# _ver_ge A B — true when version A >= B, compared as major.minor numbers.
+_ver_ge() {
+  local a_maj="${1%%.*}" b_maj="${2%%.*}" a_min b_min
+  a_min="${1#*.}"
+  a_min="${a_min%%.*}"
+  b_min="${2#*.}"
+  b_min="${b_min%%.*}"
+  ((a_maj > b_maj)) && return 0
+  ((a_maj < b_maj)) && return 1
+  ((a_min >= b_min))
+}
+
+# _distro_php_ceiling — the newest PHP (major.minor) this OS can install from
+# its OWN repositories, as plain packages or native module streams; empty when
+# unknown. Third-party sources (Remi, the ondrej PPA) deliberately do not
+# count: the installer never adds them, so it cannot assume them. Unknown stays
+# empty rather than guessed, which suppresses the warning instead of crying
+# wolf — SUSE is left out for exactly that reason.
+_distro_php_ceiling() {
+  case "$DETECT_FAMILY/$DETECT_OS_ID/$DETECT_OS_MAJOR" in
+    debian/ubuntu/22) printf '8.1' ;; # jammy ships php8.1 only
+    debian/ubuntu/24) printf '8.3' ;; # noble (CI real-install: php 8.3)
+    debian/debian/12) printf '8.2' ;; # bookworm
+    debian/debian/13) printf '8.4' ;; # trixie
+    rhel/amzn/*) printf '8.2' ;;      # AL2023 ships php8.2 packages (at least)
+    rhel/*/8) printf '7.4' ;;         # AppStream tops out at php:7.4 (verified 2026-07-05)
+    rhel/*/9) printf '8.3' ;;         # php:8.1/8.2/8.3 streams (CI, rocky 9, 2026-11-08)
+    *) return 0 ;;
+  esac
+}
 
 # --- DETECT_* defaults (keep set -u happy before/if a probe is skipped) ------
 DETECT_OS_ID="" DETECT_OS_LIKE="" DETECT_OS_VERSION="" DETECT_OS_MAJOR=""

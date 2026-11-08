@@ -27,26 +27,9 @@
 # clean web-server logs, services all active. Found on rocky 9 + Zabbix 8.0
 # (CI, 2026-11-08), where the symptom was an API that simply never answered.
 #
-# _zbx_php_min_version MAJOR — the floor, by Zabbix major. Verified from the
-# frontend's own refusal message; keep it in step when a major is added.
-_zbx_php_min_version() {
-  case "$1" in
-    8.0) printf '8.2' ;;
-    *) printf '8.0' ;;
-  esac
-}
-
-# _ver_ge A B — true when version A >= B, compared as major.minor numbers.
-_ver_ge() {
-  local a_maj="${1%%.*}" b_maj="${2%%.*}" a_min b_min
-  a_min="${1#*.}"
-  a_min="${a_min%%.*}"
-  b_min="${2#*.}"
-  b_min="${b_min%%.*}"
-  ((a_maj > b_maj)) && return 0
-  ((a_maj < b_maj)) && return 1
-  ((a_min >= b_min))
-}
+# _zbx_php_min_version and _ver_ge live in detect.sh, next to the version
+# arrays: the plan-time warning (recommend.sh) needs them as well, and
+# detect.sh is loaded before both.
 
 # pkg_php_module_enable — on RHEL-family, switch to a native php module stream
 # new enough for the planned frontend, BEFORE the packages are installed.
@@ -172,7 +155,9 @@ _pkg_failure_hint() {
   local IFS=' '
   if [[ "$DETECT_FAMILY" == "rhel" && "$DETECT_OS_MAJOR" == "8" ]] &&
     [[ " $* " == *" zabbix-web-mysql "* || " $* " == *" zabbix-web-pgsql "* ]]; then
-    printf 'package transaction failed — likely cause: RHEL 8'\''s native PHP tops out at 7.4, but this Zabbix frontend needs PHP >= 8.0.0. Add the Remi repository first (https://rpms.remirepo.net) and enable a php:remi-8.x+ stream, then retry.'
+    local want
+    want="$(_zbx_php_min_version "${PLAN_ZBX_VERSION:-$ZBX_DEFAULT_VERSION}")"
+    printf 'package transaction failed — likely cause: RHEL 8'\''s native PHP tops out at 7.4, but this Zabbix frontend needs PHP >= %s. Add the Remi repository first (https://rpms.remirepo.net) and enable a php:remi-%s+ stream, then retry.' "$want" "$want"
   else
     printf 'package transaction failed (%s) — see the log' "$DETECT_PKGMGR"
   fi
