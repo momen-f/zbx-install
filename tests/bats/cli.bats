@@ -441,7 +441,7 @@ $FAKE_SYSTEMCTL_IS_ACTIVE
   zx os-release.ubuntu2404 meminfo.4gb --detect-only
   [ "$status" -eq 0 ]
   [[ "$output" == *"Supported:       yes"* ]]
-  [[ "$output" == *"Zabbix offered:  7.0 7.4"* ]]
+  [[ "$output" == *"Zabbix offered:  7.0 7.4 8.0"* ]]
 }
 
 @test "unsupported OS in unattended mode exits 3" {

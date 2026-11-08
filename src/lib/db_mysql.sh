@@ -150,16 +150,21 @@ FLUSH PRIVILEGES;"
 # --- schema import (§12.3 point 4) ------------------------------------------------
 _ZBX_MYSQL_TRUST_TOGGLED=0
 
-# _db_mysql_schema_file — the schema to import for this plan's component.
-# proxy's proxy.sql is plain text (imported via stdin redirection below, not
-# zcat) — unlike server's gzipped server.sql.gz. Both ship in the same
-# zabbix-sql-scripts package; verified against the real package contents
-# (§15.9 stretch).
+# _db_mysql_schema_file — the schema to import for this plan's component,
+# resolved against what the package actually installed (zbx_schema_file,
+# pkg.sh) rather than a hardcoded path that moves between majors.
+# Compression is not fixed either — 7.x ships server.sql.gz and proxy.sql —
+# so both spellings are offered and _db_mysql_import_pipe picks zcat or a
+# plain redirect by extension. Falls back to the historical path so the
+# "not found" message still names something concrete.
 _db_mysql_schema_file() {
+  local p
   if plan_has proxy; then
-    printf '/usr/share/zabbix-sql-scripts/mysql/proxy.sql'
+    p="$(zbx_schema_file mysql proxy.sql proxy.sql.gz || true)"
+    printf '%s' "${p:-/usr/share/zabbix-sql-scripts/mysql/proxy.sql}"
   else
-    printf '/usr/share/zabbix-sql-scripts/mysql/server.sql.gz'
+    p="$(zbx_schema_file mysql server.sql.gz server.sql || true)"
+    printf '%s' "${p:-/usr/share/zabbix-sql-scripts/mysql/server.sql.gz}"
   fi
 }
 
@@ -215,6 +220,7 @@ _db_mysql_import() {
   fi
   if [[ "$DRY_RUN" != "1" && ! -f "$schema_file" ]]; then
     log ERROR "schema file not found: $schema_file"
+    zbx_schema_missing_hint mysql
     return 1
   fi
   printf 'SET GLOBAL log_bin_trust_function_creators = 1;\n' | run "${_DB_MYSQL_ARGS[@]}" || return 1

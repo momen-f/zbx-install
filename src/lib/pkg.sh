@@ -19,6 +19,53 @@
 # environment with Remi already configured just works), and only adds the
 # Remi hint to the error message if a frontend install on EL8 actually fails.
 
+# --- PHP version floor for the frontend ---------------------------------------
+# A Zabbix frontend enforces a PHP minimum at RUN time that its packages do
+# NOT declare: the RPMs require only php-mysqlnd, so dnf installs happily
+# against a too-old PHP and every page then answers HTTP 200 with the plain
+# text "Minimum required PHP version is 8.2.0." — correct content type HTML,
+# clean web-server logs, services all active. Found on rocky 9 + Zabbix 8.0
+# (CI, 2026-11-08), where the symptom was an API that simply never answered.
+#
+# _zbx_php_min_version and _ver_ge live in detect.sh, next to the version
+# arrays: the plan-time warning (recommend.sh) needs them as well, and
+# detect.sh is loaded before both.
+
+# pkg_php_module_enable — on RHEL-family, switch to a native php module stream
+# new enough for the planned frontend, BEFORE the packages are installed.
+# Same call as db_mysql_module_enable: selecting a stream from the distro's
+# own AppStream is routine. This is deliberately not the EL8/Remi case below —
+# that needs a THIRD-PARTY repo, which stays a hint rather than an action.
+# A no-op when the enabled stream is already new enough, when the distro
+# ships no new-enough stream (EL8), or off RHEL entirely.
+pkg_php_module_enable() {
+  [[ "$DETECT_PKGMGR" == "dnf" ]] || return 0
+  plan_has frontend || return 0
+  local want enabled stream best=""
+  want="$(_zbx_php_min_version "$PLAN_ZBX_VERSION")"
+  enabled="$(dnf module list --enabled php 2>/dev/null | awk '$1 == "php" {print $2; exit}' || true)"
+  if [[ -n "$enabled" ]] && _ver_ge "$enabled" "$want"; then
+    log INFO "php module stream $enabled already satisfies Zabbix $PLAN_ZBX_VERSION (needs >= $want)"
+    return 0
+  fi
+  # Lowest available stream that clears the floor: newer than required is a
+  # bigger change to the user's system than the job calls for.
+  while read -r stream; do
+    [[ -n "$stream" ]] || continue
+    _ver_ge "$stream" "$want" || continue
+    if [[ -z "$best" ]] || ! _ver_ge "$stream" "$best"; then best="$stream"; fi
+  done < <(dnf module list php 2>/dev/null | awk '$1 == "php" {print $2}' || true)
+  if [[ -z "$best" ]]; then
+    # EL8 lands here: no native stream >= 8.0. Leave it to dnf and to
+    # _pkg_failure_hint, which already names Remi.
+    log WARN "no native php module stream >= $want is available — the Zabbix $PLAN_ZBX_VERSION frontend needs PHP >= ${want}.0 and may refuse to run"
+    return 0
+  fi
+  log INFO "enabling php module stream $best (Zabbix $PLAN_ZBX_VERSION frontend needs PHP >= ${want}.0, enabled stream: ${enabled:-distro default})"
+  run dnf module reset php -y || true
+  run dnf module enable "php:${best}" -y || true
+}
+
 # --- system update (§11) ------------------------------------------------------
 # _pkg_count_installed — best-effort installed-package count, for the log
 # (§11). Purely informational: must never fail the update step just because
@@ -108,7 +155,9 @@ _pkg_failure_hint() {
   local IFS=' '
   if [[ "$DETECT_FAMILY" == "rhel" && "$DETECT_OS_MAJOR" == "8" ]] &&
     [[ " $* " == *" zabbix-web-mysql "* || " $* " == *" zabbix-web-pgsql "* ]]; then
-    printf 'package transaction failed — likely cause: RHEL 8'\''s native PHP tops out at 7.4, but this Zabbix frontend needs PHP >= 8.0.0. Add the Remi repository first (https://rpms.remirepo.net) and enable a php:remi-8.x+ stream, then retry.'
+    local want
+    want="$(_zbx_php_min_version "${PLAN_ZBX_VERSION:-$ZBX_DEFAULT_VERSION}")"
+    printf 'package transaction failed — likely cause: RHEL 8'\''s native PHP tops out at 7.4, but this Zabbix frontend needs PHP >= %s. Add the Remi repository first (https://rpms.remirepo.net) and enable a php:remi-%s+ stream, then retry.' "$want" "$want"
   else
     printf 'package transaction failed (%s) — see the log' "$DETECT_PKGMGR"
   fi
@@ -145,4 +194,69 @@ pkg_remove() {
     zypper) run zypper --non-interactive remove "$@" ;;
     *) return 1 ;;
   esac
+}
+
+# --- schema files shipped by zabbix-sql-scripts -------------------------------
+# The layout is NOT stable across majors, and a hardcoded path fails LATE: on
+# Zabbix 8.0 the packages installed, the database was created, and only then
+# did the import die with "schema file not found" (CI, 2026-11-08) — three
+# steps after the thing that actually moved. So resolve it at run time.
+#
+# zbx_schema_file ENGINE BASE... — print the first schema file that exists for
+# ENGINE (mysql|postgresql), trying each BASE in order. Non-zero if none is
+# found. Order of resort: the historical path (cheap, and right on 7.x), then
+# the package manager's own file list (authoritative), then a bounded search.
+zbx_schema_file() {
+  local engine="$1"
+  shift
+  local base p listed=""
+  for base in "$@"; do
+    p="/usr/share/zabbix-sql-scripts/${engine}/${base}"
+    [[ -f "$p" ]] && {
+      printf '%s' "$p"
+      return 0
+    }
+  done
+  if command -v dpkg >/dev/null 2>&1; then
+    listed="$(dpkg -L zabbix-sql-scripts 2>/dev/null || true)"
+  elif command -v rpm >/dev/null 2>&1; then
+    listed="$(rpm -ql zabbix-sql-scripts 2>/dev/null || true)"
+  fi
+  if [[ -n "$listed" ]]; then
+    for base in "$@"; do
+      while IFS= read -r p; do
+        [[ "$p" == *"/${engine}/${base}" && -f "$p" ]] && {
+          printf '%s' "$p"
+          return 0
+        }
+      done <<<"$listed"
+    done
+  fi
+  for base in "$@"; do
+    # `|| true`: head exits early, so find takes SIGPIPE and pipefail would
+    # make this assignment fail the ERR trap — the same trap that used to
+    # abort the whole install over a cosmetic df probe.
+    p="$(find /usr/share -path "*/${engine}/${base}" -type f 2>/dev/null | head -n 1 || true)"
+    [[ -n "$p" ]] && {
+      printf '%s' "$p"
+      return 0
+    }
+  done
+  return 1
+}
+
+# zbx_schema_missing_hint ENGINE — log what the package DID install, so a
+# future relayout is diagnosable from the log instead of needing a CI probe.
+zbx_schema_missing_hint() {
+  local engine="$1" listed=""
+  if command -v dpkg >/dev/null 2>&1; then
+    listed="$(dpkg -L zabbix-sql-scripts 2>/dev/null || true)"
+  elif command -v rpm >/dev/null 2>&1; then
+    listed="$(rpm -ql zabbix-sql-scripts 2>/dev/null || true)"
+  fi
+  if [[ -n "$listed" ]]; then
+    log INFO "zabbix-sql-scripts installed these ${engine} files: $(printf '%s' "$listed" | grep -i "$engine" | tr '\n' ' ')"
+  else
+    log INFO "zabbix-sql-scripts does not appear to be installed"
+  fi
 }

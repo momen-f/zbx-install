@@ -57,13 +57,68 @@ _adminpass_json_field() {
 # token on success, prints nothing on failure (network error, non-2xx, or a
 # JSON-RPC error body — e.g. the password was already changed by an earlier
 # partial run whose state mark never got persisted).
+# _adminpass_api_ready — wait for the frontend to actually serve the API.
+# services_start enables httpd/php-fpm moments earlier, so the very first
+# request can land before the socket accepts. A single attempt then reports
+# "could not log in with the default credentials", sending the reader after a
+# password problem that does not exist — which is exactly how a Zabbix 8.0
+# install failed in CI on 2026-11-08, one second after the services step.
+# Polls like health.sh's port check (§13).
+_adminpass_api_ready() {
+  # 30s, not health.sh's 15: that bound is for a port opening, while this
+  # waits for httpd + php-fpm to compile and serve a PHP application on its
+  # first ever request. On rocky 9 the API was still silent at 14s.
+  local tries="${ZBX_ADMIN_API_TRIES:-30}" i resp
+  for ((i = 1; i <= tries; i++)); do
+    # HTTP 200 alone is NOT readiness: a frontend still warming up answers
+    # 200 with an empty body, and the login that follows then parses to an
+    # empty token and gets blamed on the credentials. Require a JSON-RPC
+    # reply. apiinfo.version needs no auth, and even its error body proves
+    # PHP is actually executing.
+    resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+      -d '{"jsonrpc":"2.0","method":"apiinfo.version","params":{},"id":0}' \
+      "$ZBX_ADMIN_API_URL" 2>/dev/null || true)"
+    if [[ "$resp" == *'"jsonrpc"'* ]]; then
+      return 0
+    fi
+    ((i < tries)) && sleep 1
+  done
+  return 1
+}
+
+# _adminpass_login — token for Admin/zabbix, or empty. Distinguishes a
+# transport failure from a refusal: conflating them is what made a transient
+# "frontend not up yet" read as "the password was already changed".
 _adminpass_login() {
   local resp
-  resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  if ! resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","method":"user.login","params":{"username":"Admin","password":"zabbix"},"id":1}' \
-    "$ZBX_ADMIN_API_URL" 2>/dev/null)" || return 1
-  [[ "$resp" == *'"error"'* ]] && return 1
-  _adminpass_json_field "$resp" result
+    "$ZBX_ADMIN_API_URL" 2>/dev/null)"; then
+    log WARN "admin-pass: the API at $ZBX_ADMIN_API_URL did not answer"
+    return 1
+  fi
+  if [[ "$resp" == *'"error"'* ]]; then
+    # Surface what the API actually said. A major can change the rules here:
+    # 8.0 turns API access off by default for user roles, and a silent return
+    # would make that look identical to a wrong password.
+    local why
+    why="$(_adminpass_json_field "$resp" data)"
+    [[ -n "$why" ]] || why="$(_adminpass_json_field "$resp" message)"
+    log WARN "admin-pass: the API refused the login: ${why:-$resp}"
+    return 1
+  fi
+  local token
+  token="$(_adminpass_json_field "$resp" result)"
+  if [[ -z "$token" ]]; then
+    # Neither a transport failure nor a refusal, yet no token: the response
+    # shape is not what we expect. Say exactly that, and show it — guessing
+    # "the password was already changed" from an unread body is how this step
+    # misdiagnosed itself twice. Truncated, and log() redacts registered
+    # secrets on the way out.
+    log WARN "admin-pass: the API returned no session token; response was: ${resp:0:300}"
+    return 1
+  fi
+  printf '%s' "$token"
 }
 
 # _adminpass_set_password TOKEN — userid 1 is always Admin's on a fresh
@@ -105,9 +160,13 @@ admin_pass_update() {
     return 0
   fi
   local token resp
+  if ! _adminpass_api_ready; then
+    log WARN "admin-pass: the frontend API never came up at $ZBX_ADMIN_API_URL — the Admin password was NOT changed"
+    return 1
+  fi
   token="$(_adminpass_login)"
   if [[ -z "$token" ]]; then
-    log WARN "admin-pass: could not log into the API with the default Admin/zabbix credentials (already changed?)"
+    log WARN "admin-pass: could not log into the API with the default Admin/zabbix credentials (already changed?) — reason above"
     return 1
   fi
   resp="$(_adminpass_set_password "$token")"

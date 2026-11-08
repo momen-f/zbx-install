@@ -38,6 +38,7 @@ for a in "$@"; do
   case "$a" in
     *user.login*) call="login" ;;
     *user.logout*) call="logout" ;;
+    *apiinfo.version*) call="apiinfo" ;;
   esac
 done
 if [[ -z "$call" ]]; then
@@ -47,6 +48,10 @@ if [[ -z "$call" ]]; then
   esac
 fi
 case "$call/'"$mode"'" in
+  # The readiness probe (_adminpass_api_ready) runs BEFORE the login and
+  # passes its body in argv. Without this arm the fake fell through to
+  # reading stdin and blocked forever.
+  apiinfo/*) printf "{\"jsonrpc\":\"2.0\",\"result\":\"8.0.0\",\"id\":0}" ;;
   login/badlogin) printf "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32602,\"message\":\"Invalid params.\",\"data\":\"Login name or password is incorrect.\"},\"id\":1}" ;;
   login/*) printf "{\"jsonrpc\":\"2.0\",\"result\":\"tok123\",\"id\":1}" ;;
   update/badupdate) printf "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32602,\"message\":\"Invalid params.\",\"data\":\"Incorrect current password.\"},\"id\":2}" ;;
@@ -212,4 +217,74 @@ esac
   [ "$status" -eq 1 ]
   run cat "$BATS_TEST_TMPDIR/t7.log"
   [[ "$output" == *"Incorrect current password."* ]]
+}
+
+# --- API readiness (CI, 2026-11-08) -------------------------------------------
+# Regression tests: _adminpass_login made ONE attempt, immediately after
+# services_start had just enabled httpd/php-fpm, and ANY failure — including
+# "the socket is not accepting yet" — was reported as "could not log in with
+# the default Admin/zabbix credentials (already changed?)". A Zabbix 8.0
+# install on rocky 9 died that way one second after the services step, with
+# nothing wrong with the credentials at all.
+
+@test "_adminpass_api_ready returns as soon as the API answers in JSON-RPC" {
+  local d="$BATS_TEST_TMPDIR/ready"
+  fake_tool "$d" curl 'printf "{\"jsonrpc\":\"2.0\",\"result\":\"8.0.0\",\"id\":0}"; exit 0'
+  aprobe 'PATH="'"$d"':$PATH"; ZBX_ADMIN_API_TRIES=3
+    if _adminpass_api_ready; then echo ready; else echo "rc=$?"; fi'
+  [ "$output" = "ready" ]
+}
+
+# Regression test: readiness used to accept any HTTP 200. A frontend that is
+# still warming up answers 200 with an EMPTY body, the login that follows
+# parses to an empty token, and the step blames the credentials — which is
+# how the Zabbix 8.0 rocky 9 install failed with no reason logged at all.
+@test "_adminpass_api_ready does not accept an empty 200 as ready" {
+  local d="$BATS_TEST_TMPDIR/empty200"
+  fake_tool "$d" curl 'exit 0'
+  aprobe 'PATH="'"$d"':$PATH"; ZBX_ADMIN_API_TRIES=2
+    if _adminpass_api_ready; then echo ready; else echo notready; fi'
+  [ "$output" = "notready" ]
+}
+
+# ...and when the body is unparseable the login must say so and SHOW it,
+# rather than reporting it as "the password was already changed".
+@test "_adminpass_login reports an unparseable response instead of blaming the password" {
+  local d="$BATS_TEST_TMPDIR/weird"
+  fake_tool "$d" curl 'printf "<html>502 Bad Gateway</html>"; exit 0'
+  aprobe 'PATH="'"$d"':$PATH"; LOG_FILE="'"$BATS_TEST_TMPDIR"'/l3"; core_color_init
+    _adminpass_login || true'
+  [[ "$output" == *"no session token"* ]]
+  [[ "$output" == *"502 Bad Gateway"* ]]
+}
+
+@test "_adminpass_api_ready gives up after its bounded number of tries" {
+  local d="$BATS_TEST_TMPDIR/never"
+  # Count the attempts so a silent single-shot regression is caught too.
+  fake_tool "$d" curl 'echo x >>"'"$BATS_TEST_TMPDIR"'/tries"; exit 7'
+  : >"$BATS_TEST_TMPDIR/tries"
+  aprobe 'PATH="'"$d"':$PATH"; ZBX_ADMIN_API_TRIES=3
+    if _adminpass_api_ready; then echo ready; else echo notready; fi'
+  [ "$output" = "notready" ]
+  [ "$(wc -l <"$BATS_TEST_TMPDIR/tries")" -eq 3 ]
+}
+
+@test "_adminpass_login reports a dead endpoint as a transport failure, not a bad password" {
+  local d="$BATS_TEST_TMPDIR/dead"
+  fake_tool "$d" curl 'exit 7'
+  aprobe 'PATH="'"$d"':$PATH"; LOG_FILE="'"$BATS_TEST_TMPDIR"'/l1"; core_color_init
+    _adminpass_login || true' 
+  [[ "$output" == *"did not answer"* ]]
+  [[ "$output" != *"already changed"* ]]
+}
+
+@test "_adminpass_login surfaces the API's own refusal reason" {
+  local d="$BATS_TEST_TMPDIR/refuse"
+  # 8.0 turns API access off by default for user roles; a silent return would
+  # make that indistinguishable from a wrong password.
+  fake_tool "$d" curl 'printf "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32602,\"message\":\"Invalid params.\",\"data\":\"No API access.\"},\"id\":1}"; exit 0'
+  aprobe 'PATH="'"$d"':$PATH"; LOG_FILE="'"$BATS_TEST_TMPDIR"'/l2"; core_color_init
+    _adminpass_login || true'
+  [[ "$output" == *"refused the login"* ]]
+  [[ "$output" == *"No API access."* ]]
 }

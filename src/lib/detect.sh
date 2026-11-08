@@ -14,30 +14,84 @@
 # Offered Zabbix versions (§4) and their support tiers — every version choice
 # keys off these two arrays plus the default below, kept in one block.
 #
-# Only GA releases are offered. When Zabbix 8.0 LTS reaches GA (planned Q3
-# 2026 — confirm on the lifecycle page,
-# https://www.zabbix.com/life_cycle_and_release_policy, NOT the pre-release
-# packages already staged under repo.zabbix.com/zabbix/8.0/), enable it by
-# appending "8.0" to BOTH arrays:
-#     readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4" "8.0")
-#     readonly ZBX_LTS_VERSIONS=("7.0" "8.0")
-# then decide ZBX_DEFAULT_VERSION (keep "7.0" until 8.0 is proven in the
-# real-install CI, or move it to "8.0" as the newest LTS). repo.sh already
-# probes 8.0's "/release/" URL layout, so no repo change is needed.
-readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4")
+# Only GA releases are offered. 8.0 LTS was added once CI confirmed GA from a
+# runner that can reach zabbix.com (the dev sandbox cannot): the lifecycle page
+# https://www.zabbix.com/life_cycle_and_release_policy dates it 2026-11-05,
+# /rn/rn8.0.0 is a FINAL release-notes page (no alpha/beta/rc in its title),
+# and the download page says "8.0 LTS is out". Packages under
+# repo.zabbix.com/zabbix/8.0/ are NOT the signal — they were staged there a
+# year before GA, which is the trap this comment has always warned about.
+#
+# To add the next major: confirm it the same way, append it to both arrays,
+# and only move ZBX_DEFAULT_VERSION once the real-install CI matrix has a
+# green row for it. repo.sh probes both repo layouts, so no repo change is
+# needed (8.0 is served from the "/release/" layout, like 7.4; 7.0 is flat).
+readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4" "8.0")
 # The subset of the above that are Long Term Support releases (7.4 is a
 # standard release). Drives the "LTS" vs "current stable" label (§9 rule 1),
 # and is a set because more than one offered version can be LTS at once.
-readonly ZBX_LTS_VERSIONS=("7.0")
-# The version the recommendation engine defaults to — the newest LTS.
+readonly ZBX_LTS_VERSIONS=("7.0" "8.0")
+# The version the recommendation engine defaults to. Deliberately NOT the
+# newest LTS: 8.0 installs end to end in CI (ubuntu 24.04 and rocky 9, both
+# green 2026-11-08), but its frontend needs PHP >= 8.2, which Ubuntu 22.04
+# (php8.1) and RHEL 8 (php 7.4) cannot provide from their own repos — there
+# it would install cleanly and then refuse every request. 7.0 LTS runs on
+# every supported distro and is supported to 2027-06-30; 8.0 stays opt-in via
+# --zabbix-version 8.0, and the plan warns when the PHP floor cannot be met
+# (plan_report_warnings). Revisit when the supported list drops those distros.
 readonly ZBX_DEFAULT_VERSION="7.0"
+
+# --- PHP: the frontend's floor vs what the distro can provide ------------------
+# A Zabbix frontend enforces a PHP minimum at RUN time that its packages do not
+# declare (see pkg_php_module_enable in pkg.sh for how that surfaced). These
+# helpers let the plan warn BEFORE installing, and let pkg.sh pick a stream.
+#
+# _zbx_php_min_version MAJOR — the floor, by Zabbix major. Verified from the
+# frontend's own refusal message; keep it in step when a major is added.
+_zbx_php_min_version() {
+  case "$1" in
+    8.0) printf '8.2' ;;
+    *) printf '8.0' ;;
+  esac
+}
+
+# _ver_ge A B — true when version A >= B, compared as major.minor numbers.
+_ver_ge() {
+  local a_maj="${1%%.*}" b_maj="${2%%.*}" a_min b_min
+  a_min="${1#*.}"
+  a_min="${a_min%%.*}"
+  b_min="${2#*.}"
+  b_min="${b_min%%.*}"
+  ((a_maj > b_maj)) && return 0
+  ((a_maj < b_maj)) && return 1
+  ((a_min >= b_min))
+}
+
+# _distro_php_ceiling — the newest PHP (major.minor) this OS can install from
+# its OWN repositories, as plain packages or native module streams; empty when
+# unknown. Third-party sources (Remi, the ondrej PPA) deliberately do not
+# count: the installer never adds them, so it cannot assume them. Unknown stays
+# empty rather than guessed, which suppresses the warning instead of crying
+# wolf — SUSE is left out for exactly that reason.
+_distro_php_ceiling() {
+  case "$DETECT_FAMILY/$DETECT_OS_ID/$DETECT_OS_MAJOR" in
+    debian/ubuntu/22) printf '8.1' ;; # jammy ships php8.1 only
+    debian/ubuntu/24) printf '8.3' ;; # noble (CI real-install: php 8.3)
+    debian/debian/12) printf '8.2' ;; # bookworm
+    debian/debian/13) printf '8.4' ;; # trixie
+    rhel/amzn/*) printf '8.2' ;;      # AL2023 ships php8.2 packages (at least)
+    rhel/*/8) printf '7.4' ;;         # AppStream tops out at php:7.4 (verified 2026-07-05)
+    rhel/*/9) printf '8.3' ;;         # php:8.1/8.2/8.3 streams (CI, rocky 9, 2026-11-08)
+    *) return 0 ;;
+  esac
+}
 
 # --- DETECT_* defaults (keep set -u happy before/if a probe is skipped) ------
 DETECT_OS_ID="" DETECT_OS_LIKE="" DETECT_OS_VERSION="" DETECT_OS_MAJOR=""
 DETECT_OS_NAME="" DETECT_FAMILY="unknown" DETECT_SUPPORTED="no"
 DETECT_PKGMGR="" DETECT_PKGMGR_OK="no" DETECT_ARCH="" DETECT_ARCH_OK="no"
 DETECT_RAM_MB=0 DETECT_CPU=0 DETECT_DISK_VAR_GB=0 DETECT_DISK_ROOT_GB=0
-DETECT_DISK_WARN="no" DETECT_NET_OK="unknown" DETECT_ZBX_PRESENT="no"
+DETECT_DISK_WARN="no" DETECT_DISK_OK="yes" DETECT_NET_OK="unknown" DETECT_ZBX_PRESENT="no"
 DETECT_DB_PRESENT="none" DETECT_WEB_PRESENT="none" DETECT_SELINUX="absent"
 DETECT_FIREWALL="none" DETECT_PORT_CONFLICTS="none" DETECT_VIRT="none"
 DETECT_IS_CONTAINER="no" DETECT_FW_NOTE=""
@@ -188,6 +242,16 @@ detect_arch() {
 
 # --- hardware / disk (host) --------------------------------------------------
 detect_hw() {
+  if [[ "$DETECT_OS_ID" == "macos" ]]; then
+    # Darwin has no /proc and no nproc; sysctl carries the same two facts.
+    local bytes ncpu
+    bytes="$(sysctl -n hw.memsize 2>/dev/null || true)"
+    [[ "$bytes" =~ ^[0-9]+$ ]] && DETECT_RAM_MB=$((bytes / 1024 / 1024))
+    ncpu="$(sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || true)"
+    [[ "$ncpu" =~ ^[0-9]+$ ]] && DETECT_CPU="$ncpu"
+    : "${DETECT_RAM_MB:=0}" "${DETECT_CPU:=0}"
+    return 0
+  fi
   # MEMINFO_FILE override exists for bats fixtures, same spirit as
   # OS_RELEASE_FILE (§8).
   local mi="${MEMINFO_FILE:-/proc/meminfo}"
@@ -202,15 +266,31 @@ detect_hw() {
   : "${DETECT_RAM_MB:=0}" "${DETECT_CPU:=0}"
 }
 
+# _disk_avail_gb PATH — GiB available, or "" when df cannot answer. Keyed off
+# the "Available" column by position from the END of the row ($(NF-2)), not
+# $4: BSD df wraps a long device name onto its own line, which shifts the
+# fields on GNU df and makes a fixed $4 read the wrong column.
 _disk_avail_gb() {
-  df -Pk "$1" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}'
+  # `|| true`: df can fail outright (a restricted container, an unreadable
+  # mount table). A nice-to-have probe must never abort the install through
+  # the ERR trap — the caller reads empty output as "could not measure".
+  df -Pk "$1" 2>/dev/null |
+    awk 'NR>1 && NF>=4 {print int($(NF-2)/1024/1024); exit}' || true
 }
 
 detect_disk() {
   DETECT_DISK_VAR_GB="$(_disk_avail_gb /var)"
   DETECT_DISK_ROOT_GB="$(_disk_avail_gb /)"
+  # Empty means df could not answer. Report that rather than printing 0 as
+  # though it had been measured, and never raise a low-disk warning against a
+  # number that was never read.
+  if [[ -z "$DETECT_DISK_VAR_GB" && -z "$DETECT_DISK_ROOT_GB" ]]; then
+    DETECT_DISK_OK="no"
+  fi
   : "${DETECT_DISK_VAR_GB:=0}" "${DETECT_DISK_ROOT_GB:=0}"
-  ((DETECT_DISK_VAR_GB < 10)) && DETECT_DISK_WARN="yes"
+  if [[ "$DETECT_DISK_OK" == "yes" ]] && ((DETECT_DISK_VAR_GB < 10)); then
+    DETECT_DISK_WARN="yes"
+  fi
   return 0
 }
 
@@ -290,8 +370,18 @@ detect_firewall() {
   fi
 }
 
+# _port_listening PORT — true when something is listening on it. ss on Linux;
+# lsof on macOS, which has no ss (os_macos.sh's health check uses lsof too).
+_port_listening() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
+  else
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  fi
+}
+
 detect_ports() {
-  if ! command -v ss >/dev/null 2>&1; then
+  if ! command -v ss >/dev/null 2>&1 && ! command -v lsof >/dev/null 2>&1; then
     DETECT_PORT_CONFLICTS="unknown"
     return 0
   fi
@@ -300,7 +390,7 @@ detect_ports() {
   # when that DB engine is actually being newly installed, which is decided
   # later (recommend.sh) — plan_port_warnings does that filtering.
   for p in 80 443 10050 10051 3306 5432; do
-    if ss -ltnH "sport = :$p" 2>/dev/null | grep -q .; then
+    if _port_listening "$p"; then
       conflicts+=("$p")
     fi
   done
@@ -330,10 +420,31 @@ detect_run() {
   detect_arch
   if [[ "$DETECT_OS_ID" == "macos" ]]; then
     # macOS is agent-only: the classic zabbix_agentd from a signed .pkg, no
-    # apt/dnf/systemd/SELinux/firewalld. Skip the Linux-only probes and leave
-    # their DETECT_* fields at their initialized defaults.
+    # apt/dnf/systemd/SELinux/firewalld and no ss. Those Linux-only probes stay
+    # skipped — but RAM, CPU, disk, listening ports and an existing agent are
+    # real, measurable facts here. Leaving them at their initialized defaults
+    # printed "0 MB / 0 vCPU", "0 GiB free" and "Existing Zabbix: no" as if
+    # they had been measured; the report has no way to render "not measured"
+    # differently from "measured as zero", so it stated falsehoods.
     DETECT_PKGMGR="pkg"
     DETECT_PKGMGR_OK="yes"
+    detect_hw
+    detect_disk
+    # The .pkg leaves a receipt and /usr/local/sbin/zabbix_agentd; neither
+    # `command -v` nor systemctl can see it (sudo's secure_path excludes
+    # /usr/local/sbin), so test the receipt and the path directly. The rest of
+    # detect_existing probes mysql/httpd/nginx, which are meaningless here —
+    # and /usr/sbin/httpd ships with macOS, so it would report a web server on
+    # a Mac that has never run one.
+    if pkgutil --pkgs 2>/dev/null | grep -qi zabbix ||
+      [[ -x /usr/local/sbin/zabbix_agentd ]]; then
+      DETECT_ZBX_PRESENT="yes"
+    fi
+    detect_ports
+    # socketfilterfw/pf are not probed; "none" would claim a fact we never
+    # checked. Nothing on the macOS path consumes this (firewall.sh and the
+    # recommend rows are behind the Linux flow).
+    DETECT_FIREWALL="unknown"
   else
     detect_pkgmgr
     detect_hw
@@ -350,7 +461,7 @@ detect_run() {
   readonly DETECT_OS_ID DETECT_OS_LIKE DETECT_OS_VERSION DETECT_OS_MAJOR \
     DETECT_OS_NAME DETECT_FAMILY DETECT_SUPPORTED DETECT_PKGMGR DETECT_PKGMGR_OK \
     DETECT_ARCH DETECT_ARCH_OK DETECT_RAM_MB DETECT_CPU DETECT_DISK_VAR_GB \
-    DETECT_DISK_ROOT_GB DETECT_DISK_WARN DETECT_ZBX_PRESENT \
+    DETECT_DISK_ROOT_GB DETECT_DISK_WARN DETECT_DISK_OK DETECT_ZBX_PRESENT \
     DETECT_DB_PRESENT DETECT_WEB_PRESENT DETECT_SELINUX DETECT_FIREWALL \
     DETECT_PORT_CONFLICTS DETECT_VIRT DETECT_IS_CONTAINER DETECT_FW_NOTE
   log INFO "detected: ${DETECT_OS_ID} ${DETECT_OS_VERSION} (${DETECT_FAMILY}), pkgmgr=${DETECT_PKGMGR}, arch=${DETECT_ARCH}, supported=${DETECT_SUPPORTED}"
@@ -374,7 +485,11 @@ detect_report() {
   ui_row "Pkg manager:" "${DETECT_PKGMGR:-none} (ok=${DETECT_PKGMGR_OK})"
   ui_row "Arch:" "${DETECT_ARCH} (ok=${DETECT_ARCH_OK})" "$arch_color"
   ui_row "RAM / CPU:" "${DETECT_RAM_MB} MB / ${DETECT_CPU} vCPU"
-  ui_row "Disk /var,/:" "${DETECT_DISK_VAR_GB},${DETECT_DISK_ROOT_GB} GiB free" "$disk_color"
+  if [[ "$DETECT_DISK_OK" == "yes" ]]; then
+    ui_row "Disk /var,/:" "${DETECT_DISK_VAR_GB},${DETECT_DISK_ROOT_GB} GiB free" "$disk_color"
+  else
+    ui_row "Disk /var,/:" "unknown (df gave no answer)"
+  fi
   ui_row "Repo reachable:" "$DETECT_NET_OK" "$net_color"
   ui_row "Existing Zabbix:" "$DETECT_ZBX_PRESENT"
   ui_row "Existing DB:" "$DETECT_DB_PRESENT"

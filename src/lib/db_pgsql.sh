@@ -18,7 +18,14 @@
 # resolvable (the user configured that repo themselves), it's used; otherwise
 # this prints a warning and continues without it, per spec.
 
-readonly ZBX_PGSQL_SCHEMA=/usr/share/zabbix-sql-scripts/postgresql/server.sql.gz
+# Resolved at run time, not hardcoded: the path and the compression both move
+# between majors (see zbx_schema_file in pkg.sh). Still overridable so bats can
+# point it at a fixture.
+_db_pgsql_schema_file() {
+  local p
+  p="$(zbx_schema_file postgresql server.sql.gz server.sql || true)"
+  printf '%s' "${ZBX_PGSQL_SCHEMA:-${p:-/usr/share/zabbix-sql-scripts/postgresql/server.sql.gz}}"
+}
 # Not readonly, and respects a pre-set value — same convention as
 # OS_RELEASE_FILE/MEMINFO_FILE (detect.sh), purely so bats can inject a
 # fixture path for _db_pgsql_initdb_needed without touching a real system.
@@ -110,17 +117,25 @@ _db_pgsql_schema_present() {
 # run() can't express a pipe). AS_ZABBIX=1 uses peer auth; otherwise falls
 # back to a password-authenticated connection via a .pgpass file.
 _db_pgsql_import_pipe() {
-  local as_zabbix="$1" rc pgpass
+  local as_zabbix="$1" rc pgpass schema
+  local -a cat_cmd
+  schema="$(_db_pgsql_schema_file)"
   if [[ "$DRY_RUN" == "1" ]]; then
-    log INFO "DRY-RUN: import $ZBX_PGSQL_SCHEMA into zabbix"
+    log INFO "DRY-RUN: import $schema into zabbix"
     return 0
   fi
-  log INFO "RUN: import $ZBX_PGSQL_SCHEMA into zabbix"
+  log INFO "RUN: import $schema into zabbix"
+  # Compression is not guaranteed — an uncompressed schema fed to zcat fails
+  # with "not in gzip format", which reads like a corrupt download.
+  case "$schema" in
+    *.gz) cat_cmd=(zcat) ;;
+    *) cat_cmd=(cat) ;;
+  esac
   if [[ "$as_zabbix" == "1" ]]; then
-    { zcat "$ZBX_PGSQL_SCHEMA" | sudo -u zabbix psql zabbix; } 2>&1 | core_redact >>"$LOG_FILE"
+    { "${cat_cmd[@]}" "$schema" | sudo -u zabbix psql zabbix; } 2>&1 | core_redact >>"$LOG_FILE"
   else
     pgpass="$(_db_pgsql_pgpass_file)"
-    { zcat "$ZBX_PGSQL_SCHEMA" | PGPASSFILE="$pgpass" psql -U zabbix -h localhost zabbix; } \
+    { "${cat_cmd[@]}" "$schema" | PGPASSFILE="$pgpass" psql -U zabbix -h localhost zabbix; } \
       2>&1 | core_redact >>"$LOG_FILE"
   fi
   rc="${PIPESTATUS[0]}"
@@ -132,8 +147,9 @@ _db_pgsql_import() {
     log INFO "zabbix schema already present — skipping import"
     return 0
   fi
-  if [[ "$DRY_RUN" != "1" && ! -f "$ZBX_PGSQL_SCHEMA" ]]; then
-    log ERROR "schema file not found: $ZBX_PGSQL_SCHEMA"
+  if [[ "$DRY_RUN" != "1" && ! -f "$(_db_pgsql_schema_file)" ]]; then
+    log ERROR "schema file not found: $(_db_pgsql_schema_file)"
+    zbx_schema_missing_hint postgresql
     return 1
   fi
   if [[ "$DRY_RUN" == "1" ]] || _db_pgsql_import_pipe 1; then

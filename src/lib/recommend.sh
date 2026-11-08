@@ -415,6 +415,25 @@ plan_report() {
 # _plan_warn MSG — one yellow warning line.
 _plan_warn() { printf '  %s⚠ %s%s\n' "$C_YELLOW" "$1" "$C_RESET"; }
 
+# _plan_php_remedy WANT — what to do about a PHP floor the distro cannot meet.
+# The cheapest fix comes first: an older Zabbix whose floor the distro DOES
+# meet, when one is offered. Otherwise name the third-party source, as the
+# RHEL 8 / Remi hint always has.
+_plan_php_remedy() {
+  local want="$1" have v
+  have="$(_distro_php_ceiling)"
+  for v in "${SUPPORTED_ZBX_VERSIONS[@]}"; do
+    if _ver_ge "$have" "$(_zbx_php_min_version "$v")" && _zbx_is_lts "$v"; then
+      printf 'Choose Zabbix %s LTS instead (--zabbix-version %s), or configure PHP >= %s first' "$v" "$v" "$want"
+      [[ "$DETECT_FAMILY" == "rhel" ]] && printf ' (e.g. via the Remi repo)'
+      return 0
+    fi
+  done
+  printf 'Configure PHP >= %s first' "$want"
+  [[ "$DETECT_FAMILY" == "rhel" ]] && printf ' (e.g. via the Remi repo)'
+  return 0
+}
+
 plan_report_warnings() {
   if [[ "${FORCED_FAMILY:-0}" == "1" ]]; then
     _plan_warn "unsupported OS forced to family '$DETECT_FAMILY' — best effort only"
@@ -431,11 +450,17 @@ plan_report_warnings() {
   if [[ "$DETECT_ZBX_PRESENT" == "yes" ]]; then
     _plan_warn "existing Zabbix detected — proceeding may conflict (repair/uninstall arrive in Phase 7)"
   fi
-  # RHEL 8's native AppStream tops out at php:7.4; Zabbix 7.0/7.4 frontends
-  # need PHP >= 8.0.0 (verified live 2026-07-05).
-  # Warn at plan time; pkg.sh gives the same Remi hint if the install fails.
-  if [[ "$DETECT_FAMILY" == "rhel" && "$DETECT_OS_MAJOR" == "8" ]] && plan_has frontend; then
-    _plan_warn "RHEL 8's native PHP tops out at 7.4, but this frontend needs PHP >= 8.0.0 — install will fail unless a newer PHP (e.g. via the Remi repo) is already configured"
+  # The frontend's PHP floor vs the newest PHP this distro ships itself. This
+  # used to be a RHEL 8 special case with "8.0.0" written into the message;
+  # Zabbix 8.0 raised the floor to 8.2 and caught Ubuntu 22.04 too, so it is
+  # now a comparison. pkg.sh gives the matching hint if the install fails.
+  if plan_has frontend; then
+    local php_want php_have
+    php_want="$(_zbx_php_min_version "$PLAN_ZBX_VERSION")"
+    php_have="$(_distro_php_ceiling)"
+    if [[ -n "$php_have" ]] && ! _ver_ge "$php_have" "$php_want"; then
+      _plan_warn "the Zabbix $PLAN_ZBX_VERSION frontend needs PHP >= ${php_want}, but ${DETECT_OS_NAME:-this OS} only provides PHP ${php_have} from its own repos — the frontend will install and then refuse to run. $(_plan_php_remedy "$php_want")"
+    fi
   fi
   plan_port_warnings
 }

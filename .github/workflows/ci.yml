@@ -12,17 +12,57 @@ jobs:
 
       - name: Install tooling
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y bats
-          # Pinned exact versions (not apt's, which drift and gave a false
-          # CI failure on 2026-07-05: apt's older shellcheck flagged SC2015 on
-          # code the pinned 0.11.0 below — matching local dev — does not).
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz" \
-            | tar -xJ -C /tmp
-          sudo install /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
-          curl -fsSL "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64" \
-            -o /usr/local/bin/shfmt
-          sudo chmod +x /usr/local/bin/shfmt
+          # Exact pins, never apt's (they drift: apt's older shellcheck flagged
+          # SC2015 on 2026-07-05 for code 0.11.0 accepts, failing CI for no
+          # reason). Downloads are bounded and retried, and land in a FILE
+          # first — piping curl into tar hands an HTTP error body to tar and
+          # the job dies with "File format not recognized" instead of naming
+          # the 5xx. Same reasoning as the agent download in os_macos.sh.
+          #
+          # Each tool then has a fallback to a DIFFERENT registry at the SAME
+          # pinned version, because on 2026-11-08 GitHub's release CDN served
+          # 504 for ~30 minutes and blocked every run here — a dependency on
+          # one CDN for a tool we only lint with is not worth a red branch.
+          # The pin is the point, so the fallbacks are the Go module proxy and
+          # Docker Hub, never apt or snap, which cannot pin these versions.
+          dl() { # dl URL OUT — bounded, retried download
+            curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+              --connect-timeout 15 --max-time 180 -o "$2" "$1"
+          }
+
+          echo "::group::shellcheck v0.11.0"
+          if dl "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz" /tmp/shellcheck.tar.xz &&
+            tar -xJf /tmp/shellcheck.tar.xz -C /tmp; then
+            sudo install /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          else
+            echo "::warning::GitHub release download failed; falling back to the Docker Hub image at the same pin"
+            docker pull koalaman/shellcheck:v0.11.0
+            # A wrapper, so `make lint` keeps calling plain `shellcheck`. The
+            # repo is mounted at /mnt and is the workdir, so the relative paths
+            # in SH_SRC — and -x's sourced-file resolution — still work.
+            printf '#!/bin/sh\nexec docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 "$@"\n' |
+              sudo tee /usr/local/bin/shellcheck >/dev/null
+            sudo chmod +x /usr/local/bin/shellcheck
+          fi
+          shellcheck --version | head -3
+          echo "::endgroup::"
+
+          echo "::group::shfmt v3.13.1"
+          # `file ... | grep ELF` guards against a truncated body or an error
+          # page installing happily and resurfacing as a puzzling `make fmt`.
+          if dl "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64" /tmp/shfmt &&
+            file /tmp/shfmt | grep -q ELF; then
+            sudo install -m 755 /tmp/shfmt /usr/local/bin/shfmt
+          else
+            echo "::warning::GitHub release download failed; building the same pin from the Go module proxy"
+            GOBIN=/tmp GOFLAGS=-mod=mod go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
+            sudo install -m 755 /tmp/shfmt /usr/local/bin/shfmt
+          fi
+          shfmt --version
+          echo "::endgroup::"
 
       - name: Format check (shfmt)
         run: make fmt
@@ -139,7 +179,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # zbxflag empty = whatever ZBX_DEFAULT_VERSION is. The explicit 8.0
+          # rows below are what let the default move to 8.0: nothing may
+          # become the default until a row has installed it end to end.
           - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
+            zbxflag: ""
+            setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
+            verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
+          - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
+            zbxflag: "--zabbix-version 8.0"
             setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
           - image: "geerlingguy/docker-rockylinux9-ansible:latest"
@@ -154,8 +202,13 @@ jobs:
             # real in db_mysql_module_enable(), db_mysql.sh, and this job
             # is what actually exercises that fix on every push.)
             setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true"
+            zbxflag: ""
             # zabbix-frontend-php doesn't exist on RHEL — the frontend
             # package there is zabbix-web-mysql (DB-engine-specific).
+            verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-web-mysql"
+          - image: "geerlingguy/docker-rockylinux9-ansible:latest"
+            setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true"
+            zbxflag: "--zabbix-version 8.0"
             verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-web-mysql"
     steps:
       - uses: actions/checkout@v4
@@ -163,7 +216,7 @@ jobs:
       - name: Build the bundle
         run: ./build.sh
 
-      - name: Real express install (repo + packages + database), then verify, in ${{ matrix.image }}
+      - name: Real express install ${{ matrix.zbxflag }} (repo + packages + database), then verify, in ${{ matrix.image }}
         run: |
           set -e
           cid="$(docker run -d --privileged --cgroupns=host \
@@ -183,13 +236,54 @@ jobs:
             set -e
             ${{ matrix.setup }}
             set +e
-            bash dist/zbx-install.sh --express --yes --admin-pass --generate-passwords --no-color --log-file /var/log/zbx.log >/tmp/install.out 2>&1
+            bash dist/zbx-install.sh --express --yes ${{ matrix.zbxflag }} --admin-pass --generate-passwords --no-color --log-file /var/log/zbx.log >/tmp/install.out 2>&1
             rc=$?
             set -e
             echo "=== installer stdout (always shown) ==="
             cat /tmp/install.out
             echo "=== log tail (always shown) ==="
             tail -n 120 /var/log/zbx.log || true
+            if [ "$rc" -ne 0 ]; then
+              # The container dies with this step, so anything worth seeing has
+              # to be dumped here. The frontend is the part that fails in a way
+              # the installer cannot explain from the outside (an API that never
+              # answers looks identical whether httpd is down, the vhost is
+              # missing, or PHP is erroring).
+              echo "=== FAILED — frontend diagnostics ==="
+              systemctl is-active httpd php-fpm apache2 zabbix-server 2>&1 | head -10 || true
+              echo "--- what answers on :80 ---"
+              curl -sS -o /dev/null -w "GET /zabbix/ -> %{http_code}\n" http://127.0.0.1/zabbix/ || true
+              curl -sS -D- -o /dev/null -X POST -H "Content-Type: application/json" \
+                -d "{\"jsonrpc\":\"2.0\",\"method\":\"apiinfo.version\",\"params\":{},\"id\":0}" \
+                http://127.0.0.1/zabbix/api_jsonrpc.php 2>&1 | head -20 || true
+              echo "--- where the frontend actually lives ---"
+              ls -d /usr/share/zabbix* /usr/share/zabbix/ui 2>&1 | head -10 || true
+              ls /etc/httpd/conf.d/zabbix* /etc/apache2/conf-enabled/zabbix* 2>&1 | head -10 || true
+              echo "--- web server error log ---"
+              tail -n 40 /var/log/httpd/error_log 2>/dev/null ||
+                tail -n 40 /var/log/apache2/error.log 2>/dev/null || true
+              echo "--- php-fpm journal ---"
+              journalctl -u php-fpm --no-pager -n 30 2>/dev/null || true
+              # The headers above showed Apache serving the API as text/html
+              # with X-Powered-By: PHP/8.0.30 — a PHP fatal rendering as a
+              # blank page. Capture the body and the exact PHP floor the
+              # frontend package declares, so the fix can name real numbers
+              # instead of guessing which PHP it wanted.
+              echo "--- API response BODY (first 500 bytes) ---"
+              curl -sS -X POST -H "Content-Type: application/json" \
+                -d "{\"jsonrpc\":\"2.0\",\"method\":\"apiinfo.version\",\"params\":{},\"id\":0}" \
+                http://127.0.0.1/zabbix/api_jsonrpc.php 2>&1 | head -c 500 || true
+              echo
+              echo "--- PHP in play, and what the frontend package demands ---"
+              php -v 2>&1 | head -2 || true
+              (dnf repoquery --requires zabbix-web-mysql 2>/dev/null ||
+                dpkg -s zabbix-frontend-php 2>/dev/null) | grep -i php | head -15 || true
+              echo "--- PHP module streams available here ---"
+              dnf module list php --showduplicates 2>/dev/null | head -20 || true
+              echo "--- PHP errors, wherever they landed ---"
+              tail -n 20 /var/log/php-fpm/www-error.log 2>/dev/null || true
+              journalctl --no-pager -n 20 -t php-fpm 2>/dev/null || true
+            fi
             test "$rc" -eq 0
             echo "=== verifying installed packages ==="
             ${{ matrix.verify }}

@@ -23,20 +23,21 @@ rprobe() {
 }
 
 @test "rec_version_label distinguishes LTS from current stable" {
-  rprobe 'printf "%s|%s" "$(rec_version_label 7.0)" "$(rec_version_label 7.4)"'
-  [ "$output" = "LTS|current stable" ]
+  rprobe 'printf "%s|%s|%s" "$(rec_version_label 7.0)" "$(rec_version_label 7.4)" "$(rec_version_label 8.0)"'
+  [ "$output" = "LTS|current stable|LTS" ]
 }
 
-@test "_zbx_is_lts recognizes LTS releases, excludes standard and not-yet-GA ones" {
-  # 7.0 is LTS; 7.4 is a standard release; 8.0 is gated out until GA, so while
-  # it is absent from ZBX_LTS_VERSIONS it must NOT be treated as LTS.
-  rprobe '_zbx_is_lts 7.0 && ! _zbx_is_lts 7.4 && ! _zbx_is_lts 8.0 && echo ok'
+@test "_zbx_is_lts recognizes LTS releases and excludes standard ones" {
+  # 7.0 and 8.0 are both LTS — the set holds more than one on purpose; 7.4 is
+  # a standard release. 6.0 is not offered at all and must never read as LTS.
+  rprobe '_zbx_is_lts 7.0 && _zbx_is_lts 8.0 && ! _zbx_is_lts 7.4 && ! _zbx_is_lts 6.0 && echo ok'
   [ "$output" = "ok" ]
 }
 
 @test "the default recommendation is a separate knob from the LTS set" {
   # ZBX_DEFAULT_VERSION drives rec_zbx_version independently of which versions
-  # are LTS, so a future multi-LTS set doesn't silently move the default.
+  # are LTS — which is now load-bearing rather than hypothetical: 8.0 joined
+  # ZBX_LTS_VERSIONS without dragging the default along with it.
   rprobe 'printf "%s|%s" "$ZBX_DEFAULT_VERSION" "$(rec_zbx_version)"'
   [ "$output" = "7.0|7.0" ]
 }
@@ -96,7 +97,7 @@ rprobe() {
 
 # --- validation helpers ------------------------------------------------------------
 @test "_valid_zbx_version accepts offered, rejects others" {
-  rprobe '_valid_zbx_version 7.0 && _valid_zbx_version 7.4 && ! _valid_zbx_version 6.0 && echo ok'
+  rprobe '_valid_zbx_version 7.0 && _valid_zbx_version 7.4 && _valid_zbx_version 8.0 && ! _valid_zbx_version 6.0 && echo ok'
   [ "$output" = "ok" ]
 }
 
@@ -369,4 +370,85 @@ rprobe() {
     plan_report proxy-only'
   [[ "$output" == *"DB engine:"*"mariadb (new install)"* ]]
   [[ "$output" == *"Credentials:"*"auto-generated"* ]]
+}
+
+# --- PHP floor vs the distro (plan-time warning) ------------------------------
+# Zabbix 8.0's frontend needs PHP >= 8.2; its packages do not say so, so on a
+# distro that cannot provide it the install succeeds and the frontend then
+# refuses every request. The plan must say so BEFORE anything is installed.
+# This replaced a RHEL 8 special case that had "PHP >= 8.0.0" written into it.
+
+# pwarn OS_FIXTURE ZBX_VERSION — run plan_report_warnings for a server+frontend
+# plan on that fixture's OS, with only the facts the PHP check reads.
+# USE_COLOR=0 + core_color_init: _plan_warn reads $C_YELLOW, and under set -u
+# an unset one aborts the function — which a "does not warn" test would then
+# misread as success. Every test below therefore also asserts status 0.
+pwarn() {
+  rprobe 'USE_COLOR=0; core_color_init
+    OS_RELEASE_FILE="'"$BATS_TEST_DIRNAME"'/../fixtures/os-release.'"$1"'"
+    detect_os >/dev/null 2>&1; detect_family
+    PLAN_COMPONENTS=server,frontend,agent PLAN_ZBX_VERSION='"$2"'
+    REC_SIZING=ok DETECT_ARCH_OK=yes DETECT_IS_CONTAINER=no DETECT_ZBX_PRESENT=no DETECT_PORT_CONFLICTS=none
+    plan_report_warnings'
+}
+
+@test "_distro_php_ceiling knows each supported distro it can vouch for, and nothing else" {
+  rprobe 'for f in ubuntu2204 ubuntu2404 debian12 debian13 rocky9 almalinux8 amzn2023 leap156; do
+      OS_RELEASE_FILE="'"$BATS_TEST_DIRNAME"'/../fixtures/os-release.$f"
+      detect_os >/dev/null 2>&1; detect_family
+      printf "%s=%s " "$f" "$(_distro_php_ceiling)"
+    done'
+  # SUSE is deliberately unknown: no warning beats a wrong one.
+  [ "$output" = "ubuntu2204=8.1 ubuntu2404=8.3 debian12=8.2 debian13=8.4 rocky9=8.3 almalinux8=7.4 amzn2023=8.2 leap156= " ]
+}
+
+@test "plan warns when Zabbix 8.0's PHP floor exceeds Ubuntu 22.04's PHP, and points at 7.0" {
+  pwarn ubuntu2204 8.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"needs PHP >= 8.2"* ]]
+  [[ "$output" == *"only provides PHP 8.1"* ]]
+  [[ "$output" == *"Zabbix 7.0 LTS instead"* ]]
+}
+
+@test "plan does not warn for 7.0 on Ubuntu 22.04 (8.1 clears its 8.0 floor)" {
+  pwarn ubuntu2204 7.0
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"needs PHP"* ]]
+}
+
+@test "plan does not warn for 8.0 where the distro can provide 8.2+ (ubuntu 24.04, rocky 9)" {
+  pwarn ubuntu2404 8.0
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"needs PHP"* ]]
+  pwarn rocky9 8.0
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"needs PHP"* ]]
+}
+
+# The old RHEL 8 special case, now a consequence of the comparison: no offered
+# version's floor is met by PHP 7.4, so the remedy is Remi, not "pick 7.0".
+@test "plan still warns on RHEL 8 for 7.0, and names Remi rather than a version that also fails" {
+  pwarn almalinux8 7.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"needs PHP >= 8.0"* ]]
+  [[ "$output" == *"only provides PHP 7.4"* ]]
+  [[ "$output" == *"Remi"* ]]
+  [[ "$output" != *"Zabbix 7.0 LTS instead"* ]]
+}
+
+@test "plan stays silent where the ceiling is unknown (SUSE) rather than guessing" {
+  pwarn leap156 8.0
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"needs PHP"* ]]
+}
+
+@test "an agent-only plan never gets the PHP warning (no frontend)" {
+  rprobe 'USE_COLOR=0; core_color_init
+    OS_RELEASE_FILE="'"$BATS_TEST_DIRNAME"'/../fixtures/os-release.ubuntu2204"
+    detect_os >/dev/null 2>&1; detect_family
+    PLAN_COMPONENTS=agent PLAN_ZBX_VERSION=8.0
+    REC_SIZING=ok DETECT_ARCH_OK=yes DETECT_IS_CONTAINER=no DETECT_ZBX_PRESENT=no DETECT_PORT_CONFLICTS=none
+    plan_report_warnings'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"needs PHP"* ]]
 }

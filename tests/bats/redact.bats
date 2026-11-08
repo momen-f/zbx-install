@@ -58,6 +58,68 @@ CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
   [[ "$output" == *"fail=7"* ]]
 }
 
+# Regression test: run() built its log line with the global IFS=$'\n\t', so
+# the bare "$*" joined argv with NEWLINES. One command became one log line
+# per argument, only the first of them timestamped — the "RUN:" entries were
+# ungreppable and core_tail_log showed argv fragments instead of the command
+# and the error under it. run() now pins a local IFS=' ' first.
+@test "run() logs the whole command on one line, not one line per argument" {
+  run bash -c '
+    source "'"$CORE"'"
+    core_color_init
+    LOG_FILE="'"$BATS_TEST_TMPDIR"'/ifs.log"
+    core_log_init
+    fake_cmd() { :; }
+    run fake_cmd --assume-yes install zabbix-server-mysql
+    cat "$LOG_FILE"
+  '
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "${lines[0]}" == *"[INFO] RUN: fake_cmd --assume-yes install zabbix-server-mysql"* ]]
+}
+
+# Same IFS bug seen from the terminal instead of the log: --dry-run's
+# preview printf'd the same newline-joined "$*", so every argument after the
+# first landed on its own line with no "  + " in front of it.
+@test "run()'s DRY_RUN preview is a single '  + cmd args' line" {
+  run bash -c '
+    source "'"$CORE"'"
+    core_color_init
+    LOG_FILE="'"$BATS_TEST_TMPDIR"'/dry.log"
+    core_log_init
+    DRY_RUN=1
+    run apt-get --assume-yes install zabbix-server-mysql
+  '
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [ "${lines[0]}" = "  + apt-get --assume-yes install zabbix-server-mysql" ]
+}
+
+# Regression test: run() wired up `| core_redact >>"$LOG_FILE"` unconditionally.
+# When that append failed (disk full, log unlinked under us) core_redact exited
+# on its failed redirection, the command took SIGPIPE on its FIRST WRITE, and
+# PIPESTATUS[0] handed the caller 141 for a command that had SUCCEEDED — so
+# err_menu reported a failure that never happened. run() now checks the log is
+# appendable and runs the command unpiped when it is not. Only commands that
+# produce output were bitten, hence the chatty fakes; the sleep makes the
+# vanished reader a certainty rather than a race.
+@test "run() reports the real exit status when the log file can't be appended to" {
+  # A plain file mid-path makes the append fail with ENOTDIR even for root,
+  # which a mode-0444 file would not.
+  : >"$BATS_TEST_TMPDIR/blocked"
+  run bash -c '
+    source "'"$CORE"'"
+    core_color_init
+    LOG_FILE="'"$BATS_TEST_TMPDIR"'/blocked/zbx.log"
+    chatty_ok()   { sleep 0.2; printf "installing\n"; return 0; }
+    chatty_fail() { sleep 0.2; printf "installing\n"; return 9; }
+    rc=0; run chatty_ok   || rc=$?; echo "ok=$rc"
+    rc=0; run chatty_fail || rc=$?; echo "fail=$rc"
+  '
+  [[ "$output" == *"ok=0"* ]]
+  [[ "$output" == *"fail=9"* ]]
+}
+
 @test "core_exit_code_for maps steps to Appendix B codes" {
   run bash -c 'source "'"$CORE"'"; for s in detect network repo packages health db other; do core_exit_code_for "$s"; done | paste -sd" " -'
   [ "$status" -eq 0 ]
@@ -149,4 +211,88 @@ CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
   [[ "$output" == *"[b] Back to plan"* ]]
   [[ "$output" != *"Re-run checks"* ]]
   [[ "$output" != *"Continue to summary anyway"* ]]
+}
+
+# Regression test: die() printed the same sentence twice — once from
+# `log ERROR` (log echoes ERROR lines to stderr) and once from its own ✗
+# printf. It now logs LAST with that stderr copy dropped, so a hard stop
+# says it once.
+@test "die() prints its message exactly once" {
+  run bash -c '
+    source "'"$CORE"'"
+    USE_COLOR=0; core_color_init
+    LOG_FILE="'"$BATS_TEST_TMPDIR"'/die-once.log"
+    printf "seeded-1\nseeded-2\nseeded-3\n" >"$LOG_FILE"
+    ZBX_DIE_TAIL=2
+    die "step detect failed: BOOMTOKEN" 3
+  '
+  [ "$status" -eq 3 ]
+  [ "$(grep -c "BOOMTOKEN" <<<"$output")" -eq 1 ]
+  # ...and exactly once is not the same as "not at all": the fix moved the
+  # log() call to the END of die() with its stderr copy dropped, so the file
+  # copy must survive. Without this, a die() that never logged would pass.
+  [ "$(grep -c "\[ERROR\].*BOOMTOKEN" "$BATS_TEST_TMPDIR/die-once.log")" -eq 1 ]
+}
+
+# Regression test: the ✗ copy interpolated the raw message, bypassing
+# core_redact — and err_menu passes die() a step's raw reason, so a DB
+# client's "access denied (password: ...)" printed in clear on the terminal
+# even though log()'s copy of the same sentence was masked. LOG_FILE is left
+# empty so the ✗ line is the only thing on stderr to match against.
+@test "die() masks registered secrets in its ✗ line" {
+  run bash -c '
+    source "'"$CORE"'"
+    USE_COLOR=0; core_color_init
+    core_register_secret "s3cr3t-pass"
+    LOG_FILE=""
+    die "step db failed: access denied (password: s3cr3t-pass)" 8
+  '
+  [ "$status" -eq 8 ]
+  [[ "$output" == *"access denied (password: ********)"* ]]
+  [[ "$output" != *"s3cr3t-pass"* ]]
+  # Pin that the redacted copy is die()'s OWN ✗ line. Without this the test
+  # passes just as well against the old code path where log()'s (already
+  # redacted) stderr copy was the only line printed.
+  [[ "$output" == *"✗ step db failed"* ]]
+}
+
+# Regression test: die() printed "See log: <path>" and nothing from the log
+# itself, so an unattended hard stop told the user nothing — while err_menu,
+# the interactive path, already shows core_tail_log 5 above its menu. Safe to
+# print: everything in the log went through core_redact. ZBX_DIE_TAIL keeps
+# the tail small here (it defaults to 12).
+@test "die() prints the tail of the log, not just its path" {
+  run bash -c '
+    source "'"$CORE"'"
+    USE_COLOR=0; core_color_init
+    LOG_FILE="'"$BATS_TEST_TMPDIR"'/die-tail.log"
+    printf "seeded-1\nseeded-2\nseeded-3\nseeded-4\nseeded-5\nseeded-6\n" >"$LOG_FILE"
+    ZBX_DIE_TAIL=3
+    die "step health failed" 6
+  '
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"--- last 3 lines of "*"/die-tail.log ---"* ]]
+  [[ "$output" == *"seeded-4"* ]]
+  [[ "$output" == *"seeded-6"* ]]
+  [[ "$output" != *"seeded-1"* ]] # a tail, not the whole file
+  [[ "$output" == *"Full log: "*"/die-tail.log"* ]]
+}
+
+# Regression test: the `|| true` on die()'s core_tail_log is load-bearing.
+# core_tail_log ends in `[[ -f "$LOG_FILE" ]] && tail`, so a set-but-missing
+# log makes it return 1; unguarded under set -Eeuo pipefail that fires the ERR
+# trap and exits 1, losing the Appendix B code die() was called with. The
+# header assertion also pins the tail itself, which the old "See log:" die()
+# never printed.
+@test "die() keeps its exit code when LOG_FILE is set but the file is missing" {
+  run bash -c '
+    source "'"$CORE"'"
+    USE_COLOR=0; core_color_init
+    core_init_traps
+    LOG_FILE="'"$BATS_TEST_TMPDIR"'/never-created.log"
+    ZBX_DIE_TAIL=3
+    die "step health failed" 6
+  '
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"--- last 3 lines of "*"/never-created.log ---"* ]]
 }
