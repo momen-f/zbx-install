@@ -264,6 +264,25 @@ jobs:
                 tail -n 40 /var/log/apache2/error.log 2>/dev/null || true
               echo "--- php-fpm journal ---"
               journalctl -u php-fpm --no-pager -n 30 2>/dev/null || true
+              # The headers above showed Apache serving the API as text/html
+              # with X-Powered-By: PHP/8.0.30 — a PHP fatal rendering as a
+              # blank page. Capture the body and the exact PHP floor the
+              # frontend package declares, so the fix can name real numbers
+              # instead of guessing which PHP it wanted.
+              echo "--- API response BODY (first 500 bytes) ---"
+              curl -sS -X POST -H "Content-Type: application/json" \
+                -d "{\"jsonrpc\":\"2.0\",\"method\":\"apiinfo.version\",\"params\":{},\"id\":0}" \
+                http://127.0.0.1/zabbix/api_jsonrpc.php 2>&1 | head -c 500 || true
+              echo
+              echo "--- PHP in play, and what the frontend package demands ---"
+              php -v 2>&1 | head -2 || true
+              (dnf repoquery --requires zabbix-web-mysql 2>/dev/null ||
+                dpkg -s zabbix-frontend-php 2>/dev/null) | grep -i php | head -15 || true
+              echo "--- PHP module streams available here ---"
+              dnf module list php --showduplicates 2>/dev/null | head -20 || true
+              echo "--- PHP errors, wherever they landed ---"
+              tail -n 20 /var/log/php-fpm/www-error.log 2>/dev/null || true
+              journalctl --no-pager -n 20 -t php-fpm 2>/dev/null || true
             fi
             test "$rc" -eq 0
             echo "=== verifying installed packages ==="
