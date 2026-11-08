@@ -213,3 +213,50 @@ esac
   run cat "$BATS_TEST_TMPDIR/t7.log"
   [[ "$output" == *"Incorrect current password."* ]]
 }
+
+# --- API readiness (CI, 2026-11-08) -------------------------------------------
+# Regression tests: _adminpass_login made ONE attempt, immediately after
+# services_start had just enabled httpd/php-fpm, and ANY failure — including
+# "the socket is not accepting yet" — was reported as "could not log in with
+# the default Admin/zabbix credentials (already changed?)". A Zabbix 8.0
+# install on rocky 9 died that way one second after the services step, with
+# nothing wrong with the credentials at all.
+
+@test "_adminpass_api_ready returns as soon as the endpoint answers" {
+  local d="$BATS_TEST_TMPDIR/ready"
+  fake_tool "$d" curl 'exit 0'
+  aprobe 'PATH="'"$d"':$PATH"; ZBX_ADMIN_API_TRIES=3
+    if _adminpass_api_ready; then echo ready; else echo "rc=$?"; fi'
+  [ "$output" = "ready" ]
+}
+
+@test "_adminpass_api_ready gives up after its bounded number of tries" {
+  local d="$BATS_TEST_TMPDIR/never"
+  # Count the attempts so a silent single-shot regression is caught too.
+  fake_tool "$d" curl 'echo x >>"'"$BATS_TEST_TMPDIR"'/tries"; exit 7'
+  : >"$BATS_TEST_TMPDIR/tries"
+  aprobe 'PATH="'"$d"':$PATH"; ZBX_ADMIN_API_TRIES=3
+    if _adminpass_api_ready; then echo ready; else echo notready; fi'
+  [ "$output" = "notready" ]
+  [ "$(wc -l <"$BATS_TEST_TMPDIR/tries")" -eq 3 ]
+}
+
+@test "_adminpass_login reports a dead endpoint as a transport failure, not a bad password" {
+  local d="$BATS_TEST_TMPDIR/dead"
+  fake_tool "$d" curl 'exit 7'
+  aprobe 'PATH="'"$d"':$PATH"; LOG_FILE="'"$BATS_TEST_TMPDIR"'/l1"; core_color_init
+    _adminpass_login || true' 
+  [[ "$output" == *"did not answer"* ]]
+  [[ "$output" != *"already changed"* ]]
+}
+
+@test "_adminpass_login surfaces the API's own refusal reason" {
+  local d="$BATS_TEST_TMPDIR/refuse"
+  # 8.0 turns API access off by default for user roles; a silent return would
+  # make that indistinguishable from a wrong password.
+  fake_tool "$d" curl 'printf "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32602,\"message\":\"Invalid params.\",\"data\":\"No API access.\"},\"id\":1}"; exit 0'
+  aprobe 'PATH="'"$d"':$PATH"; LOG_FILE="'"$BATS_TEST_TMPDIR"'/l2"; core_color_init
+    _adminpass_login || true'
+  [[ "$output" == *"refused the login"* ]]
+  [[ "$output" == *"No API access."* ]]
+}
