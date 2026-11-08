@@ -7,6 +7,9 @@ CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
 DETECT="${BATS_TEST_DIRNAME}/../../src/lib/detect.sh"
 REC="${BATS_TEST_DIRNAME}/../../src/lib/recommend.sh"
 DBM="${BATS_TEST_DIRNAME}/../../src/lib/db_mysql.sh"
+# _db_mysql_schema_file resolves the schema through zbx_schema_file (pkg.sh)
+# instead of hardcoding a path that moves between Zabbix majors.
+PKG="${BATS_TEST_DIRNAME}/../../src/lib/pkg.sh"
 
 mprobe() {
   run bash -c 'source "'"$CORE"'"; source "'"$DBM"'"; '"$1"
@@ -15,7 +18,7 @@ mprobe() {
 # db_mysql_module_enable also needs plan_has (recommend.sh) — a separate
 # probe so the other tests' sourcing footprint stays unchanged.
 mrprobe() {
-  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'"; source "'"$REC"'"; source "'"$DBM"'"; '"$1"
+  run bash -c 'source "'"$CORE"'"; source "'"$DETECT"'"; source "'"$REC"'"; source "'"$PKG"'"; source "'"$DBM"'"; '"$1"
 }
 
 # fake_tool_dir NAME BODY... — build a tiny PATH dir with one or more fakes;
@@ -250,9 +253,43 @@ fake_tool() {
 
 # --- proxy (§15.9 stretch): schema file selection + db name ------------------------
 
-@test "_db_mysql_schema_file: server.sql.gz for server, proxy.sql for proxy" {
+# On a host with no zabbix-sql-scripts installed (every CI box running these
+# unit tests), resolution finds nothing and must fall back to the historical
+# 7.x paths — still the right answer there, and it keeps the "not found"
+# message concrete instead of empty.
+@test "_db_mysql_schema_file falls back to the 7.x paths when nothing is installed" {
   mrprobe 'PLAN_COMPONENTS=server; _db_mysql_schema_file; printf " "; PLAN_COMPONENTS=proxy; _db_mysql_schema_file'
   [ "$output" = "/usr/share/zabbix-sql-scripts/mysql/server.sql.gz /usr/share/zabbix-sql-scripts/mysql/proxy.sql" ]
+}
+
+# Regression test: the path was hardcoded, so Zabbix 8.0 relocating the schema
+# failed the install at the IMPORT step — packages installed, database created,
+# then "schema file not found" (CI, 2026-11-08). It must now prefer whatever
+# is actually on disk, including an uncompressed server.sql.
+@test "_db_mysql_schema_file prefers a schema that actually exists over the historical path" {
+  local root="$BATS_TEST_TMPDIR/usr/share/zabbix-sql-scripts/mysql"
+  mkdir -p "$root"
+  : >"$root/server.sql"
+  mrprobe 'PLAN_COMPONENTS=server
+    # shadow the search root by pointing find at the fixture tree
+    zbx_schema_file() { printf "%s" "'"$root"'/server.sql"; }
+    _db_mysql_schema_file'
+  [ "$output" = "$root/server.sql" ]
+}
+
+# ...and an uncompressed schema must be imported with a plain redirect, not
+# zcat, which would fail with "not in gzip format" and read like a corrupt file.
+@test "_db_mysql_import_pipe picks zcat for .gz and a redirect for plain .sql" {
+  local d="$BATS_TEST_TMPDIR/pipe"
+  mkdir -p "$d"
+  printf 'SELECT 1;\n' >"$d/plain.sql"
+  printf 'SELECT 1;\n' | gzip >"$d/comp.sql.gz"
+  mrprobe 'DRY_RUN=0 LOG_FILE="'"$d"'/log"
+    _DB_MYSQL_ARGS=(tee -a "'"$d"'/fed")
+    _db_mysql_import_pipe "'"$d"'/plain.sql" zabbix
+    _db_mysql_import_pipe "'"$d"'/comp.sql.gz" zabbix
+    grep -c "SELECT 1" "'"$d"'/fed"'
+  [ "$output" = "2" ]
 }
 
 @test "_db_mysql_create_and_grant targets zabbix_proxy for a proxy plan" {

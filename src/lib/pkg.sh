@@ -146,3 +146,68 @@ pkg_remove() {
     *) return 1 ;;
   esac
 }
+
+# --- schema files shipped by zabbix-sql-scripts -------------------------------
+# The layout is NOT stable across majors, and a hardcoded path fails LATE: on
+# Zabbix 8.0 the packages installed, the database was created, and only then
+# did the import die with "schema file not found" (CI, 2026-11-08) — three
+# steps after the thing that actually moved. So resolve it at run time.
+#
+# zbx_schema_file ENGINE BASE... — print the first schema file that exists for
+# ENGINE (mysql|postgresql), trying each BASE in order. Non-zero if none is
+# found. Order of resort: the historical path (cheap, and right on 7.x), then
+# the package manager's own file list (authoritative), then a bounded search.
+zbx_schema_file() {
+  local engine="$1"
+  shift
+  local base p listed=""
+  for base in "$@"; do
+    p="/usr/share/zabbix-sql-scripts/${engine}/${base}"
+    [[ -f "$p" ]] && {
+      printf '%s' "$p"
+      return 0
+    }
+  done
+  if command -v dpkg >/dev/null 2>&1; then
+    listed="$(dpkg -L zabbix-sql-scripts 2>/dev/null || true)"
+  elif command -v rpm >/dev/null 2>&1; then
+    listed="$(rpm -ql zabbix-sql-scripts 2>/dev/null || true)"
+  fi
+  if [[ -n "$listed" ]]; then
+    for base in "$@"; do
+      while IFS= read -r p; do
+        [[ "$p" == *"/${engine}/${base}" && -f "$p" ]] && {
+          printf '%s' "$p"
+          return 0
+        }
+      done <<<"$listed"
+    done
+  fi
+  for base in "$@"; do
+    # `|| true`: head exits early, so find takes SIGPIPE and pipefail would
+    # make this assignment fail the ERR trap — the same trap that used to
+    # abort the whole install over a cosmetic df probe.
+    p="$(find /usr/share -path "*/${engine}/${base}" -type f 2>/dev/null | head -n 1 || true)"
+    [[ -n "$p" ]] && {
+      printf '%s' "$p"
+      return 0
+    }
+  done
+  return 1
+}
+
+# zbx_schema_missing_hint ENGINE — log what the package DID install, so a
+# future relayout is diagnosable from the log instead of needing a CI probe.
+zbx_schema_missing_hint() {
+  local engine="$1" listed=""
+  if command -v dpkg >/dev/null 2>&1; then
+    listed="$(dpkg -L zabbix-sql-scripts 2>/dev/null || true)"
+  elif command -v rpm >/dev/null 2>&1; then
+    listed="$(rpm -ql zabbix-sql-scripts 2>/dev/null || true)"
+  fi
+  if [[ -n "$listed" ]]; then
+    log INFO "zabbix-sql-scripts installed these ${engine} files: $(printf '%s' "$listed" | grep -i "$engine" | tr '\n' ' ')"
+  else
+    log INFO "zabbix-sql-scripts does not appear to be installed"
+  fi
+}
