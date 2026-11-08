@@ -12,32 +12,57 @@ jobs:
 
       - name: Install tooling
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y bats
-          # Pinned exact versions (not apt's, which drift and gave a false
-          # CI failure on 2026-07-05: apt's older shellcheck flagged SC2015 on
-          # code the pinned 0.11.0 below — matching local dev — does not).
-          # Download to a file and retry: piping curl straight into tar means a
-          # 5xx body (or an empty one) is fed to tar as if it were an archive,
-          # and the job dies with "File format not recognized" instead of
-          # naming the HTTP error. A GitHub release 504 did exactly that on
-          # 2026-11-08 and failed a run that had nothing wrong with it.
-          # --retry covers 429/5xx and transport errors; the whole tree's
-          # downloads are expected to be bounded and retried (see os_macos.sh).
-          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
-            --connect-timeout 15 --max-time 180 \
-            -o /tmp/shellcheck.tar.xz \
-            "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
-          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          sudo install /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
-          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
-            --connect-timeout 15 --max-time 180 \
-            -o /tmp/shfmt \
-            "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64"
-          # A truncated or error-page download would otherwise install happily
-          # and fail later as a confusing "make fmt" error.
-          file /tmp/shfmt | grep -q ELF
-          sudo install -m 755 /tmp/shfmt /usr/local/bin/shfmt
+          # Exact pins, never apt's (they drift: apt's older shellcheck flagged
+          # SC2015 on 2026-07-05 for code 0.11.0 accepts, failing CI for no
+          # reason). Downloads are bounded and retried, and land in a FILE
+          # first — piping curl into tar hands an HTTP error body to tar and
+          # the job dies with "File format not recognized" instead of naming
+          # the 5xx. Same reasoning as the agent download in os_macos.sh.
+          #
+          # Each tool then has a fallback to a DIFFERENT registry at the SAME
+          # pinned version, because on 2026-11-08 GitHub's release CDN served
+          # 504 for ~30 minutes and blocked every run here — a dependency on
+          # one CDN for a tool we only lint with is not worth a red branch.
+          # The pin is the point, so the fallbacks are the Go module proxy and
+          # Docker Hub, never apt or snap, which cannot pin these versions.
+          dl() { # dl URL OUT — bounded, retried download
+            curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+              --connect-timeout 15 --max-time 180 -o "$2" "$1"
+          }
+
+          echo "::group::shellcheck v0.11.0"
+          if dl "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz" /tmp/shellcheck.tar.xz &&
+            tar -xJf /tmp/shellcheck.tar.xz -C /tmp; then
+            sudo install /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          else
+            echo "::warning::GitHub release download failed; falling back to the Docker Hub image at the same pin"
+            docker pull koalaman/shellcheck:v0.11.0
+            # A wrapper, so `make lint` keeps calling plain `shellcheck`. The
+            # repo is mounted at /mnt and is the workdir, so the relative paths
+            # in SH_SRC — and -x's sourced-file resolution — still work.
+            printf '#!/bin/sh\nexec docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 "$@"\n' |
+              sudo tee /usr/local/bin/shellcheck >/dev/null
+            sudo chmod +x /usr/local/bin/shellcheck
+          fi
+          shellcheck --version | head -3
+          echo "::endgroup::"
+
+          echo "::group::shfmt v3.13.1"
+          # `file ... | grep ELF` guards against a truncated body or an error
+          # page installing happily and resurfacing as a puzzling `make fmt`.
+          if dl "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64" /tmp/shfmt &&
+            file /tmp/shfmt | grep -q ELF; then
+            sudo install -m 755 /tmp/shfmt /usr/local/bin/shfmt
+          else
+            echo "::warning::GitHub release download failed; building the same pin from the Go module proxy"
+            GOBIN=/tmp GOFLAGS=-mod=mod go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
+            sudo install -m 755 /tmp/shfmt /usr/local/bin/shfmt
+          fi
+          shfmt --version
+          echo "::endgroup::"
 
       - name: Format check (shfmt)
         run: make fmt
