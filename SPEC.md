@@ -57,7 +57,7 @@
 
 Match on `ID` first, fall back to `ID_LIKE`. Architecture: `x86_64` fully supported; `aarch64` only where Zabbix publishes packages for that distro (*verify at build time*), otherwise print a clear unsupported message. Confirmed available for Amazon Linux 2023 (`aarch64`); macOS is agent-only on Apple Silicon (`arm64`).
 
-**Zabbix versions offered:** `7.0` LTS (**default recommendation**) and `7.4` (current stable; 7.4.11 as of June 2026). Three arrays in `detect.sh` govern this: `SUPPORTED_ZBX_VERSIONS` (the offered list), `ZBX_LTS_VERSIONS` (which of them are LTS — a set, since more than one can be LTS at once), and `ZBX_DEFAULT_VERSION` (the default recommendation). Only GA releases are offered; adding `8.0` LTS when it reaches GA means appending it to the first two arrays. Do not offer 6.0.
+**Zabbix versions offered:** `7.0` LTS (**default recommendation**), `7.4` (current stable), and `8.0` LTS (GA 2026-11-05). Three arrays in `detect.sh` govern this: `SUPPORTED_ZBX_VERSIONS` (the offered list), `ZBX_LTS_VERSIONS` (which of them are LTS — a set, since more than one can be LTS at once), and `ZBX_DEFAULT_VERSION` (the default recommendation). Only GA releases are offered, and GA is confirmed on the [lifecycle page](https://www.zabbix.com/life_cycle_and_release_policy) — never from the presence of packages under `repo.zabbix.com/zabbix/<ver>/`, which are staged long before release (8.0's were there a year early). The default is a separate knob from the LTS set on purpose: a newly-GA LTS is offered immediately but only becomes the default once the `real-install` CI matrix has a green row installing it end to end. Do not offer 6.0.
 
 **DB engines:** MariaDB (default), MySQL 8.x, PostgreSQL 15/16 with optional TimescaleDB. Embed a per-Zabbix-version minimum-version map (`REQ_MYSQL`, `REQ_MARIADB`, `REQ_PGSQL`) and validate the detected/installed engine against it; populate the map from https://www.zabbix.com/documentation/7.0/en/manual/installation/requirements and the 7.4 equivalent (*verify at build time*). **SQLite3** is offered only as a Zabbix **proxy** backend (embedded, self-initializing) — never a server/frontend option (§15.9).
 
@@ -180,7 +180,7 @@ Produce a set of `DETECT_*` readonly variables plus a pretty table for `--detect
 
 Deterministic rules, applied to detection output — no magic:
 
-1. **Zabbix version:** default to `ZBX_DEFAULT_VERSION` (the newest LTS, currently `7.0`); versions listed in `ZBX_LTS_VERSIONS` are labeled "LTS", the rest "current stable" (e.g. `7.4`).
+1. **Zabbix version:** default to `ZBX_DEFAULT_VERSION` (currently `7.0`; not simply the newest LTS — see §4 on why the default lags a new GA); versions listed in `ZBX_LTS_VERSIONS` are labeled "LTS" (`7.0`, `8.0`), the rest "current stable" (`7.4`).
 2. **DB engine:** if PostgreSQL already installed and healthy → suggest `pgsql`; else if MySQL/MariaDB already installed → suggest `mysql`; else default **MariaDB**.
 3. **Web server:** if nginx present and apache absent → nginx; else Apache.
 4. **Components:** full stack (server+frontend+agent2) unless RAM < 2 GiB → warn and suggest agent-only.

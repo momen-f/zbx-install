@@ -23,20 +23,21 @@ rprobe() {
 }
 
 @test "rec_version_label distinguishes LTS from current stable" {
-  rprobe 'printf "%s|%s" "$(rec_version_label 7.0)" "$(rec_version_label 7.4)"'
-  [ "$output" = "LTS|current stable" ]
+  rprobe 'printf "%s|%s|%s" "$(rec_version_label 7.0)" "$(rec_version_label 7.4)" "$(rec_version_label 8.0)"'
+  [ "$output" = "LTS|current stable|LTS" ]
 }
 
-@test "_zbx_is_lts recognizes LTS releases, excludes standard and not-yet-GA ones" {
-  # 7.0 is LTS; 7.4 is a standard release; 8.0 is gated out until GA, so while
-  # it is absent from ZBX_LTS_VERSIONS it must NOT be treated as LTS.
-  rprobe '_zbx_is_lts 7.0 && ! _zbx_is_lts 7.4 && ! _zbx_is_lts 8.0 && echo ok'
+@test "_zbx_is_lts recognizes LTS releases and excludes standard ones" {
+  # 7.0 and 8.0 are both LTS — the set holds more than one on purpose; 7.4 is
+  # a standard release. 6.0 is not offered at all and must never read as LTS.
+  rprobe '_zbx_is_lts 7.0 && _zbx_is_lts 8.0 && ! _zbx_is_lts 7.4 && ! _zbx_is_lts 6.0 && echo ok'
   [ "$output" = "ok" ]
 }
 
 @test "the default recommendation is a separate knob from the LTS set" {
   # ZBX_DEFAULT_VERSION drives rec_zbx_version independently of which versions
-  # are LTS, so a future multi-LTS set doesn't silently move the default.
+  # are LTS — which is now load-bearing rather than hypothetical: 8.0 joined
+  # ZBX_LTS_VERSIONS without dragging the default along with it.
   rprobe 'printf "%s|%s" "$ZBX_DEFAULT_VERSION" "$(rec_zbx_version)"'
   [ "$output" = "7.0|7.0" ]
 }
@@ -96,7 +97,7 @@ rprobe() {
 
 # --- validation helpers ------------------------------------------------------------
 @test "_valid_zbx_version accepts offered, rejects others" {
-  rprobe '_valid_zbx_version 7.0 && _valid_zbx_version 7.4 && ! _valid_zbx_version 6.0 && echo ok'
+  rprobe '_valid_zbx_version 7.0 && _valid_zbx_version 7.4 && _valid_zbx_version 8.0 && ! _valid_zbx_version 6.0 && echo ok'
   [ "$output" = "ok" ]
 }
 

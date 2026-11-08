@@ -14,22 +14,27 @@
 # Offered Zabbix versions (§4) and their support tiers — every version choice
 # keys off these two arrays plus the default below, kept in one block.
 #
-# Only GA releases are offered. When Zabbix 8.0 LTS reaches GA (planned Q3
-# 2026 — confirm on the lifecycle page,
-# https://www.zabbix.com/life_cycle_and_release_policy, NOT the pre-release
-# packages already staged under repo.zabbix.com/zabbix/8.0/), enable it by
-# appending "8.0" to BOTH arrays:
-#     readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4" "8.0")
-#     readonly ZBX_LTS_VERSIONS=("7.0" "8.0")
-# then decide ZBX_DEFAULT_VERSION (keep "7.0" until 8.0 is proven in the
-# real-install CI, or move it to "8.0" as the newest LTS). repo.sh already
-# probes 8.0's "/release/" URL layout, so no repo change is needed.
-readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4")
+# Only GA releases are offered. 8.0 LTS was added once CI confirmed GA from a
+# runner that can reach zabbix.com (the dev sandbox cannot): the lifecycle page
+# https://www.zabbix.com/life_cycle_and_release_policy dates it 2026-11-05,
+# /rn/rn8.0.0 is a FINAL release-notes page (no alpha/beta/rc in its title),
+# and the download page says "8.0 LTS is out". Packages under
+# repo.zabbix.com/zabbix/8.0/ are NOT the signal — they were staged there a
+# year before GA, which is the trap this comment has always warned about.
+#
+# To add the next major: confirm it the same way, append it to both arrays,
+# and only move ZBX_DEFAULT_VERSION once the real-install CI matrix has a
+# green row for it. repo.sh probes both repo layouts, so no repo change is
+# needed (8.0 is served from the "/release/" layout, like 7.4; 7.0 is flat).
+readonly SUPPORTED_ZBX_VERSIONS=("7.0" "7.4" "8.0")
 # The subset of the above that are Long Term Support releases (7.4 is a
 # standard release). Drives the "LTS" vs "current stable" label (§9 rule 1),
 # and is a set because more than one offered version can be LTS at once.
-readonly ZBX_LTS_VERSIONS=("7.0")
-# The version the recommendation engine defaults to — the newest LTS.
+readonly ZBX_LTS_VERSIONS=("7.0" "8.0")
+# The version the recommendation engine defaults to. Deliberately NOT the
+# newest LTS yet: 8.0 reached GA on 2026-11-05 and nothing has installed it
+# end to end, so the default moves to it only once its real-install CI row
+# has been green.
 readonly ZBX_DEFAULT_VERSION="7.0"
 
 # --- DETECT_* defaults (keep set -u happy before/if a probe is skipped) ------
