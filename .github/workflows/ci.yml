@@ -17,12 +17,27 @@ jobs:
           # Pinned exact versions (not apt's, which drift and gave a false
           # CI failure on 2026-07-05: apt's older shellcheck flagged SC2015 on
           # code the pinned 0.11.0 below — matching local dev — does not).
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz" \
-            | tar -xJ -C /tmp
+          # Download to a file and retry: piping curl straight into tar means a
+          # 5xx body (or an empty one) is fed to tar as if it were an archive,
+          # and the job dies with "File format not recognized" instead of
+          # naming the HTTP error. A GitHub release 504 did exactly that on
+          # 2026-11-08 and failed a run that had nothing wrong with it.
+          # --retry covers 429/5xx and transport errors; the whole tree's
+          # downloads are expected to be bounded and retried (see os_macos.sh).
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 180 \
+            -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
           sudo install /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
-          curl -fsSL "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64" \
-            -o /usr/local/bin/shfmt
-          sudo chmod +x /usr/local/bin/shfmt
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 180 \
+            -o /tmp/shfmt \
+            "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64"
+          # A truncated or error-page download would otherwise install happily
+          # and fail later as a confusing "make fmt" error.
+          file /tmp/shfmt | grep -q ELF
+          sudo install -m 755 /tmp/shfmt /usr/local/bin/shfmt
 
       - name: Format check (shfmt)
         run: make fmt
