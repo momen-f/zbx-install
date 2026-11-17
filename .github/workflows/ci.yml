@@ -184,10 +184,12 @@ jobs:
           # become the default until a row has installed it end to end.
           - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
             zbxflag: ""
+            expected_version: "7.0"
             setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
           - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
             zbxflag: "--zabbix-version 8.0"
+            expected_version: "8.0"
             setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
           - image: "geerlingguy/docker-rockylinux9-ansible:latest"
@@ -203,12 +205,14 @@ jobs:
             # is what actually exercises that fix on every push.)
             setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true"
             zbxflag: ""
+            expected_version: "7.0"
             # zabbix-frontend-php doesn't exist on RHEL — the frontend
             # package there is zabbix-web-mysql (DB-engine-specific).
             verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-web-mysql"
           - image: "geerlingguy/docker-rockylinux9-ansible:latest"
             setup: "dnf -y install dnf-plugins-core >/dev/null 2>&1 || true; dnf config-manager --set-disabled epel >/dev/null 2>&1 || true"
             zbxflag: "--zabbix-version 8.0"
+            expected_version: "8.0"
             verify: "rpm -q zabbix-agent2 zabbix-server-mysql zabbix-web-mysql"
     steps:
       - uses: actions/checkout@v4
@@ -287,6 +291,16 @@ jobs:
             test "$rc" -eq 0
             echo "=== verifying installed packages ==="
             ${{ matrix.verify }}
+            echo "=== verifying the installed Zabbix version ==="
+            for binary in zabbix_server zabbix_agent2; do
+              "$binary" -V > /tmp/zabbix-version.out
+              cat /tmp/zabbix-version.out
+              version="$(head -n 1 /tmp/zabbix-version.out)"
+              case "$version" in
+                *" ${{ matrix.expected_version }}."*) ;;
+                *) echo "unexpected Zabbix version: $version"; exit 1 ;;
+              esac
+            done
             echo "=== verifying the schema was actually imported ==="
             test -f /root/zbx-install-credentials.txt
             pw="$(sed -n "s/^Database password: //p" /root/zbx-install-credentials.txt)"

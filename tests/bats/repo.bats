@@ -89,3 +89,11 @@ rprobe() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"/zabbix/7.0/ubuntu/pool/main/"* ]]
 }
+
+@test "8.0 repo resolution falls back to the release layout" {
+  rprobe 'DETECT_FAMILY=debian DETECT_OS_ID=ubuntu DETECT_OS_VERSION=24.04 DETECT_OS_MAJOR=24 DETECT_ARCH=x86_64 PLAN_ZBX_VERSION=8.0 DRY_RUN=0;
+    curl() { [[ "${*: -1}" == *"/8.0/release/"* ]]; }
+    repo_resolve_url'
+  [ "$status" -eq 0 ]
+  [ "$output" = "https://repo.zabbix.com/zabbix/8.0/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_8.0+ubuntu24.04_all.deb" ]
+}

@@ -810,3 +810,11 @@ EOF
   run cat "$BATS_TEST_TMPDIR/zbx.log"
   [[ "$output" == *"repo already set up (state file) — skipping"* ]]
 }
+
+@test "8.0 override is LTS and uses the 8.0 repository" {
+  zx os-release.ubuntu2404 meminfo.4gb --dry-run --express --yes --zabbix-version 8.0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"8.0 (LTS)"* ]]
+  [[ "$output" == *"/zabbix/8.0/ubuntu/"* ]]
+  [[ "$output" == *"zabbix-server-mysql"* ]]
+}

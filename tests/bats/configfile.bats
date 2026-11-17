@@ -27,10 +27,10 @@ mkcfg() {
 
 @test "cfgfile_parse: a minimal valid express config sets CFGFILE_MODE and OPT_* correctly" {
   local f
-  f="$(mkcfg 'MODE=express' 'DB_ENGINE=pgsql' 'WEB_SERVER=nginx' 'ZBX_VERSION=7.4')"
+  f="$(mkcfg 'MODE=express' 'DB_ENGINE=pgsql' 'WEB_SERVER=nginx' 'ZBX_VERSION=8.0')"
   cprobe 'cfgfile_parse "'"$f"'" && printf "%s|%s|%s|%s\n" "$CFGFILE_MODE" "$OPT_DB" "$OPT_WEB" "$OPT_ZBX_VERSION"'
   [ "$status" -eq 0 ]
-  [ "$output" = "express|pgsql|nginx|7.4" ]
+  [ "$output" = "express|pgsql|nginx|8.0" ]
 }
 
 @test "cfgfile_parse: blank lines and # comments are ignored" {
