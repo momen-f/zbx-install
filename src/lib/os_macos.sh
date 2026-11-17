@@ -133,7 +133,7 @@ macos_agent_install() {
     # so a whole-output match could be satisfied by the temp filename alone.
     if [[ "$sig" == *$'\n'* ]]; then chain="${sig#*$'\n'}"; else chain=""; fi
     if ! grep -Eq '^[[:space:]]*Status: signed by (a developer certificate issued by Apple|a certificate trusted by (Mac OS X|macOS))' <<<"$chain" ||
-      ! grep -Eq '^[[:space:]]*1\. Developer ID Installer: Zabbix SIA( \([A-Z0-9]+\))?[[:space:]]*$' <<<"$chain"; then
+      ! grep -Eiq '^[[:space:]]*1\. Developer ID Installer: Zabbix SIA( \([A-Z0-9]+\))?[[:space:]]*$' <<<"$chain"; then
       log ERROR "macOS agent package is not signed by Zabbix — refusing to install (pkgutil: ${sig%%$'\n'*})"
       return 1
     fi

@@ -262,10 +262,10 @@ pkgutil_signed_by() {
 # read it through `grep -q`, so the report was thrown away whichever way the
 # check went: nothing in the log said what the package was actually signed
 # with. It is captured and logged now.
-@test "macos_agent_install installs a package whose signer is Zabbix" {
+@test "macos_agent_install accepts the uppercase ZABBIX signer from the official package" {
   local d="$BATS_TEST_TMPDIR/sigok"
   tool_farm "$d" "$BATS_TEST_TMPDIR/sigok-base"
-  pkgutil_signed_by "$d" "Zabbix SIA (A1B2C3D4E5)"
+  pkgutil_signed_by "$d" "ZABBIX SIA (N4XY2CV2DJ)"
   rprobe "$d" 'macos_agent_install; echo "rc=$?"'
   [ "$status" -eq 0 ]
   [[ "$output" == *"rc=0"* ]]
@@ -273,7 +273,7 @@ pkgutil_signed_by() {
   [[ "$(cat "$d/installer.calls")" == *"-pkg"* ]]
   # the signer that was accepted is on the record (rprobe's log, see above)
   [[ "$(cat "$BATS_TEST_TMPDIR/rprobe.log")" == *"pkgutil --check-signature: Package"* ]]
-  [[ "$(cat "$BATS_TEST_TMPDIR/rprobe.log")" == *"Developer ID Installer: Zabbix SIA"* ]]
+  [[ "$(cat "$BATS_TEST_TMPDIR/rprobe.log")" == *"Developer ID Installer: ZABBIX SIA (N4XY2CV2DJ)"* ]]
 }
 
 # Regression test: the rejection stands, but it used to be the whole story —
