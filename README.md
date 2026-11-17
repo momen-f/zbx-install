@@ -64,7 +64,8 @@ or see [SPEC.md](SPEC.md) §7 (CLI) and Appendix A (`--config` file format).
 | macOS (Apple Silicon) | agent only (7.0 / 7.4) | .pkg |
 | Windows (10 / Server 2016+) | agent only (7.0 / 7.4), via `install.ps1` | MSI |
 
-Offers Zabbix `7.0` (LTS, default) and `7.4` (current stable). Full detail
+The Bash installer offers Zabbix `7.0` (LTS, default), `7.4`, and `8.0` (LTS).
+Select 8.0 with `--zabbix-version 8.0`; the default remains 7.0. Full detail
 in [SPEC.md](SPEC.md) §4.
 
 ## Other ways to run it
