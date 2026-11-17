@@ -68,6 +68,21 @@ The Bash installer offers Zabbix `7.0` (LTS, default), `7.4`, and `8.0` (LTS).
 Select 8.0 with `--zabbix-version 8.0`; the default remains 7.0. Full detail
 in [SPEC.md](SPEC.md) §4.
 
+### TimescaleDB
+
+For PostgreSQL, enable TimescaleDB in custom mode or set `TIMESCALEDB=yes`
+in an unattended config. Configure the TimescaleDB repository first, with
+a release supported by your Zabbix version; the installer does not add this
+third-party repository. It selects a package for the running PostgreSQL major,
+preserves other preloaded extensions, restarts PostgreSQL when needed, and
+imports Zabbix's TimescaleDB schema. Setup failures stop database provisioning.
+
+CI tests Ubuntu 24.04 with PostgreSQL 16 and TimescaleDB 2.30.2 against both
+the default Zabbix 7.0 and opt-in 8.0, including hypertables, compression settings,
+history writes, and the running server/frontend. See
+[Zabbix's TimescaleDB requirements](https://www.zabbix.com/documentation/7.0/en/manual/installation/requirements#database-management-system)
+when choosing a repository version.
+
 ## Other ways to run it
 
 ```sh

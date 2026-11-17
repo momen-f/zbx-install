@@ -613,3 +613,28 @@ jobs:
           if [[ "${{ matrix.engine }}" == pgsql ]]; then
             docker exec -w /w "$cid" bash tests/integration/pgsql-import.sh
           fi
+
+  timescaledb-install:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        zabbix: ["7.0", "8.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the bundle
+        run: ./build.sh
+      - name: Install and verify real TimescaleDB with Zabbix ${{ matrix.zabbix }}
+        run: |
+          cid="$(docker run -d --privileged --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw -v "$PWD:/w:ro" \
+            geerlingguy/docker-ubuntu2404-ansible:latest)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            state="$(docker exec "$cid" systemctl is-system-running 2>/dev/null || true)"
+            case "$state" in running | degraded) break ;; esac
+            sleep 1
+          done
+          docker exec -w /w "$cid" bash tests/integration/timescaledb.sh "${{ matrix.zabbix }}"

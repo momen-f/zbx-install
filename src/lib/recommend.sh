@@ -248,6 +248,8 @@ plan_packages() {
     # generic zabbix-frontend-php regardless of DB engine.
     if [[ "$DETECT_FAMILY" == "debian" ]]; then
       pkgs+=(zabbix-frontend-php)
+      # The frontend's alternative dependency otherwise selects php-mysql.
+      [[ "$PLAN_DB_ENGINE" != "pgsql" ]] || pkgs+=(php-pgsql)
     elif [[ "$PLAN_DB_ENGINE" == "pgsql" ]]; then
       pkgs+=(zabbix-web-pgsql)
     else

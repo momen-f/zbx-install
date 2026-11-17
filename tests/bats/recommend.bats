@@ -158,11 +158,11 @@ rprobe() {
   [ "$output" = "zabbix-web-pgsql zabbix-apache-conf" ]
 }
 
-@test "plan_packages: apt frontend package stays generic regardless of DB engine" {
+@test "plan_packages: apt PostgreSQL frontend includes the matching PHP driver" {
   rprobe 'DETECT_FAMILY=debian DETECT_DB_PRESENT=none DETECT_WEB_PRESENT=apache DETECT_SELINUX=absent;
     PLAN_COMPONENTS=frontend PLAN_DB_ENGINE=pgsql PLAN_WEB_SERVER=apache;
     plan_packages; printf "%s" "$PLAN_PACKAGES"'
-  [ "$output" = "zabbix-frontend-php zabbix-apache-conf" ]
+  [ "$output" = "zabbix-frontend-php php-pgsql zabbix-apache-conf" ]
 }
 
 @test "plan_packages: pgsql on RHEL adds postgresql-server" {

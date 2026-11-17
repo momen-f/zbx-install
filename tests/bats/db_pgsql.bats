@@ -5,6 +5,7 @@
 CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
 DBP="${BATS_TEST_DIRNAME}/../../src/lib/db_pgsql.sh"
 PKG="${BATS_TEST_DIRNAME}/../../src/lib/pkg.sh"
+CONFIG="${BATS_TEST_DIRNAME}/../../src/lib/config.sh"
 
 pprobe() {
   run bash -c 'source "'"$CORE"'"; source "'"$DBP"'"; '"$1"
@@ -89,6 +90,7 @@ fake_tool() {
 
 @test "_db_pgsql_timescale_enable warns and continues (returns 0) when unavailable" {
   pprobe 'core_color_init; core_log_init; DRY_RUN=0; PLAN_TIMESCALE=yes;
+    _db_pgsql_timescale_package() { printf timescaledb-2-postgresql-16; }
     _db_pgsql_timescale_available() { return 1; }
     _db_pgsql_timescale_enable; echo "rc=$?"'
   [ "$status" -eq 0 ]
@@ -132,34 +134,98 @@ fake_tool() {
 @test "TimescaleDB installs its package even when the main packages step is done" {
   for manager in apt dnf zypper; do
     local d="$BATS_TEST_TMPDIR/$manager"
-    local tool="$manager" package=timescaledb-2-postgresql
+    local tool="$manager" package=timescaledb-2-postgresql-16
     [[ "$manager" != apt ]] || tool=apt-get
     [[ "$manager" != zypper ]] || package=timescaledb
     fake_tool "$d" "$tool" 'echo "$*" >>"'"$d"'/packages"'
-    fake_tool "$d" sudo 'echo "$*" >>"'"$d"'/extension"; cat >/dev/null'
+    printf "SELECT 'timescale-conversion';\n" >"$d/schema.sql"
+    fake_tool "$d" sudo 'echo "$*" >>"'"$d"'/extension"
+      case "$*" in
+        *server_version_num*) echo 160015 ;;
+        *shared_preload_libraries*) echo timescaledb ;;
+        *) cat >>"'"$d"'/sql" ;;
+      esac'
     pprobe 'source "'"$PKG"'"; core_color_init; LOG_FILE="'"$d"'/log";
       STATE_FILE="'"$d"'/state"; core_state_init; state_mark_done packages;
       DRY_RUN=0 PLAN_TIMESCALE=yes DETECT_PKGMGR="'"$manager"'" PATH="'"$d"':$PATH";
       _db_pgsql_timescale_available() { return 0; }
+      zbx_schema_file() { echo "'"$d"'/schema.sql"; }
       _db_pgsql_timescale_enable'
     [ "$status" -eq 0 ]
     grep -q "install.*$package" "$d/packages"
     grep -q ON_ERROR_STOP=1 "$d/extension"
+    grep -q timescale-conversion "$d/sql"
     grep -q 'TimescaleDB enabled' "$d/log"
   done
 }
 
-@test "TimescaleDB package or extension failures warn without claiming it was enabled" {
-  for failure in package extension; do
+@test "TimescaleDB package failure warns; setup failures propagate without claiming success" {
+  for failure in package preload extension schema; do
     pprobe 'core_color_init; LOG_FILE="'"$BATS_TEST_TMPDIR"'/'"$failure"'.log";
       DRY_RUN=0 PLAN_TIMESCALE=yes DETECT_PKGMGR=apt;
+      _db_pgsql_timescale_package() { printf timescaledb-2-postgresql-16; }
       _db_pgsql_timescale_available() { return 0; }
+      zbx_schema_file() { printf /fixture/schema.sql; }
       _pkg_install_cmd() { [[ "'"$failure"'" != package ]]; }
-      run() { echo extension-attempt; cat >/dev/null; return 3; }
+      _db_pgsql_timescale_preload() { [[ "'"$failure"'" != preload ]]; }
+      _db_pgsql_import_pipe() { [[ "'"$failure"'" != schema ]]; }
+      run() { echo extension-attempt; cat >/dev/null; [[ "'"$failure"'" != extension ]]; }
       _db_pgsql_timescale_enable'
-    [ "$status" -eq 0 ]
-    [[ "$output" == *'continuing without it'* ]]
-    if [[ "$failure" == package ]]; then [[ "$output" != *extension-attempt* ]]; fi
+    if [[ "$failure" == package ]]; then
+      [ "$status" -eq 0 ]
+      [[ "$output" == *'continuing without it'* && "$output" != *extension-attempt* ]]
+    else
+      [ "$status" -ne 0 ]
+    fi
     ! grep -q 'TimescaleDB enabled' "$BATS_TEST_TMPDIR/$failure.log"
   done
+}
+
+@test "TimescaleDB package uses the running PostgreSQL major and rejects invalid versions" {
+  pprobe 'DETECT_PKGMGR=apt; sudo() { echo 170006; }; _db_pgsql_timescale_package'
+  [ "$output" = timescaledb-2-postgresql-17 ]
+  pprobe 'DETECT_PKGMGR=dnf; sudo() { echo invalid; }; _db_pgsql_timescale_package'
+  [ "$status" -ne 0 ]
+}
+
+@test "TimescaleDB apt availability requires a real candidate, not an empty or uninstalled entry" {
+  for candidate in '' '  Installed: (none)' '  Candidate: (none)' '  Candidate: 2.30.2~ubuntu24.04'; do
+    local d="$BATS_TEST_TMPDIR/policy"
+    fake_tool "$d" apt-cache 'printf "%s\n" "'"$candidate"'"'
+    pprobe 'DRY_RUN=0 DETECT_PKGMGR=apt PATH="'"$d"':$PATH"; _db_pgsql_timescale_available timescaledb-2-postgresql-16'
+    if [[ "$candidate" == *2.30.2* ]]; then [ "$status" -eq 0 ]; else [ "$status" -ne 0 ]; fi
+  done
+}
+
+@test "TimescaleDB preload preserves existing libraries and only restarts when missing" {
+  local d="$BATS_TEST_TMPDIR/preload"
+  mkdir -p "$d"
+  printf "shared_preload_libraries = 'pg_stat_statements'\n" >"$d/postgresql.conf"
+  fake_tool "$d" sudo 'case "$*" in
+    *SHOW*) echo pg_stat_statements ;;
+    *) echo "'"$d"'/postgresql.conf" ;;
+  esac'
+  fake_tool "$d" systemctl 'echo "$*" >"'"$d"'/restart"'
+  pprobe 'source "'"$CONFIG"'"; core_color_init; LOG_FILE=/dev/null; DRY_RUN=0 PATH="'"$d"':$PATH"; _db_pgsql_timescale_preload'
+  [ "$status" -eq 0 ]
+  grep -qx "shared_preload_libraries='pg_stat_statements,timescaledb'" "$d/postgresql.conf"
+  grep -qx 'restart postgresql' "$d/restart"
+  rm "$d/restart"
+  fake_tool "$d" sudo 'echo "pg_stat_statements, timescaledb"'
+  pprobe 'DRY_RUN=0 PATH="'"$d"':$PATH"; _db_pgsql_timescale_preload'
+  [ "$status" -eq 0 ]
+  [ ! -e "$d/restart" ]
+}
+
+@test "TimescaleDB setup failure does not mark database provisioning complete" {
+  pprobe 'core_color_init; LOG_FILE=/dev/null; STATE_FILE="'"$BATS_TEST_TMPDIR"'/state"; core_state_init;
+    _db_pgsql_initdb_needed() { return 1; }
+    run() { return 0; }
+    _db_pgsql_create_role_and_db() { return 0; }
+    _db_pgsql_import() { return 0; }
+    _db_pgsql_timescale_enable() { return 1; }
+    err_menu() { exit 8; }
+    db_pgsql_provision'
+  [ "$status" -eq 8 ]
+  ! grep -qx 'db=done' "$BATS_TEST_TMPDIR/state"
 }

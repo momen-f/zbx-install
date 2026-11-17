@@ -171,19 +171,47 @@ _db_pgsql_import() {
 }
 
 # --- TimescaleDB (§12.3 point 4, optional, custom mode only) --------------------
-# _db_pgsql_timescale_available — is a timescaledb package resolvable right
+# _db_pgsql_timescale_package — match the running server, not the client binary.
+_db_pgsql_timescale_package() {
+  local version
+  version="$(sudo -u postgres psql -X -tAc 'SHOW server_version_num')" || return 1
+  [[ "$version" =~ ^[0-9]+$ ]] && ((version >= 100000)) || return 1
+  case "$DETECT_PKGMGR" in
+    apt | dnf) printf 'timescaledb-2-postgresql-%s' "$((version / 10000))" ;;
+    zypper) printf timescaledb ;;
+    *) return 1 ;;
+  esac
+}
+
+# _db_pgsql_timescale_available PACKAGE — is a timescaledb package resolvable right
 # now? Only true if the user already configured TimescaleDB's own repo
 # (never added automatically here — see the module header).
 _db_pgsql_timescale_available() {
   [[ "$DRY_RUN" == "1" ]] && return 1
   case "$DETECT_PKGMGR" in
-    apt) apt-cache policy timescaledb-2-postgresql 2>/dev/null | grep -qv 'Unable to locate' ;;
-    dnf) dnf info timescaledb-2-postgresql >/dev/null 2>&1 ;;
+    apt) apt-cache policy "$1" 2>/dev/null | awk '$1 == "Candidate:" && $2 != "(none)" { found=1 } END { exit !found }' ;;
+    dnf) dnf info "$1" >/dev/null 2>&1 ;;
     zypper)
-      zypper info timescaledb 2>/dev/null | grep -q '^Version'
+      zypper info "$1" 2>/dev/null | grep -q '^Version'
       ;;
     *) return 1 ;;
   esac
+}
+
+_db_pgsql_timescale_preload() {
+  local libraries normalized conf
+  libraries="$(sudo -u postgres psql -X -tAc 'SHOW shared_preload_libraries')" || return 1
+  normalized="${libraries//[[:space:]\"]/}"
+  [[ ",$normalized," == *,timescaledb,* ]] && return 0
+  conf="$(sudo -u postgres psql -X -tAc "SELECT COALESCE(sourcefile, current_setting('config_file')) FROM pg_settings WHERE name='shared_preload_libraries'")" || return 1
+  [[ -f "$conf" ]] || return 1
+  # Edit the effective setting atomically; ALTER SYSTEM would quote a whole list as one library.
+  libraries="${libraries}${libraries:+,}timescaledb"
+  libraries="${libraries//\\/\\\\}"
+  libraries="${libraries//\'/\'\'}"
+  set_conf "$conf" shared_preload_libraries "'$libraries'" || return 1
+  log INFO "restarting PostgreSQL to preload TimescaleDB"
+  run systemctl restart postgresql
 }
 
 _db_pgsql_timescale_enable() {
@@ -192,25 +220,27 @@ _db_pgsql_timescale_enable() {
     log INFO "dry-run: would check TimescaleDB availability and enable it if the PG major matches"
     return 0
   fi
-  if ! _db_pgsql_timescale_available; then
+  local package schema
+  package="$(_db_pgsql_timescale_package)" || {
+    log WARN "could not resolve a TimescaleDB package for the running PostgreSQL server — continuing without it"
+    return 0
+  }
+  if ! _db_pgsql_timescale_available "$package"; then
     log WARN "TimescaleDB requested but no matching package is available (its own repo isn't configured) — continuing without it"
     return 0
   fi
-  local -a pkgs=()
-  case "$DETECT_PKGMGR" in
-    apt) pkgs=(timescaledb-2-postgresql) ;;
-    dnf) pkgs=(timescaledb-2-postgresql) ;;
-    zypper) pkgs=(timescaledb) ;;
-  esac
+  schema="$(zbx_schema_file postgresql/timescaledb schema.sql schema.sql.gz)" || {
+    log ERROR "Zabbix TimescaleDB schema not found — check the zabbix-sql-scripts package"
+    return 1
+  }
   # The main packages step is already marked done; this is a separate optional install.
-  if ! _pkg_install_cmd ${pkgs[@]+"${pkgs[@]}"}; then
+  if ! _pkg_install_cmd "$package"; then
     log WARN "TimescaleDB package install failed — continuing without it"
     return 0
   fi
-  printf 'CREATE EXTENSION IF NOT EXISTS timescaledb;\n' | run sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d zabbix || {
-    log WARN "enabling the TimescaleDB extension failed — continuing without it"
-    return 0
-  }
+  _db_pgsql_timescale_preload || return 1
+  printf 'CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;\n' | run sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d zabbix || return 1
+  ZBX_PGSQL_SCHEMA="$schema" _db_pgsql_import_pipe 1 || return 1
   log INFO "TimescaleDB enabled — note: some features are TSL-licensed, not Apache; see https://www.zabbix.com/documentation/current/en/manual/appendix/install/timescaledb"
 }
 
@@ -243,7 +273,10 @@ db_pgsql_provision() {
     err_menu db "importing the zabbix schema failed — see the log"
   done
 
-  _db_pgsql_timescale_enable
+  while true; do
+    _db_pgsql_timescale_enable && break
+    err_menu db "configuring TimescaleDB failed — see the log"
+  done
 
   state_mark_done db
   log INFO "database provisioned successfully"
