@@ -4,7 +4,7 @@
 BASH_BIN := $(shell command -v /opt/homebrew/bin/bash bash 2>/dev/null | head -1)
 BASH_DIR := $(dir $(BASH_BIN))
 
-SH_SRC := install.sh build.sh src/main.sh $(wildcard src/lib/*.sh) $(wildcard tests/integration/*.sh)
+SH_SRC := install.sh build.sh src/main.sh $(wildcard src/lib/*.sh) $(wildcard tests/integration/*.sh) $(wildcard examples/*.sh)
 DIST   := dist/zbx-install.sh
 
 .PHONY: all lint fmt test build matrix clean
@@ -18,7 +18,7 @@ build:
 # whole-program analysis, avoiding false "unused" on cross-module vars), the
 # standalone build script, the bootstrap, and the bundled artifact. SPEC §16.
 lint: build
-	shellcheck -x src/main.sh build.sh install.sh tests/integration/*.sh
+	shellcheck -x src/main.sh build.sh install.sh tests/integration/*.sh examples/*.sh
 	shellcheck $(DIST)
 
 # Formatting check: 2-space indent, indented case bodies (-ci).

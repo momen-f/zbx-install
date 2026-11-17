@@ -220,8 +220,8 @@ fake_tool() {
 @test "config_render_nginx uncomments listen/server_name and is idempotent" {
   local d="$BATS_TEST_TMPDIR/etc5"
   mkdir -p "$d"
-  printf 'server {\n#        listen          8080;\n#        server_name     example.com;\n}\n' >"$d/nginx.conf"
-  cfprobe 'core_color_init; core_log_init; DRY_RUN=0; ZBX_ETC_DIR="'"$d"'";
+  printf 'server {\n#        listen          8080;\n#        server_name     example.com;\n        location /vendor {\n                deny all;\n        }\n}\n' >"$d/nginx.conf"
+  cfprobe 'core_color_init; core_log_init; DRY_RUN=0; ZBX_ETC_DIR="'"$d"'"; ZBX_NGINX_DIR="'"$d"'/nginx";
     DETECT_FAMILY=debian; PLAN_WEB_SERVER=nginx;
     config_render_nginx; config_render_nginx'
   [ "$status" -eq 0 ]
@@ -231,6 +231,52 @@ fake_tool() {
   [[ "$output" != *"#"*"listen"* ]]
   run grep -c 'listen' "$d/nginx.conf"
   [ "$output" = "1" ]
+  run grep -cF 'rewrite ^/zabbix(?:/(.*))?$ /$1 last;' "$d/nginx.conf"
+  [ "$output" = "1" ]
+  run grep -cF 'location ^~ /vendor {' "$d/nginx.conf"
+  [ "$output" = "1" ]
+}
+
+@test "nginx disables only the unchanged package default symlink and retains its target" {
+  local d="$BATS_TEST_TMPDIR/nginx" bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$d/sites-enabled" "$d/sites-available"
+  printf 'package default\n' >"$d/sites-available/default"
+  ln -s ../sites-available/default "$d/sites-enabled/default"
+  fake_tool "$bin" dpkg-query 'printf " /etc/nginx/sites-available/default expectedhash\n"'
+  fake_tool "$bin" md5sum 'printf "expectedhash  %s\n" "$1"'
+  cfprobe 'core_color_init; core_log_init; PATH="'"$bin"':$PATH"; ZBX_NGINX_DIR="'"$d"'";
+    _config_nginx_disable_packaged_default; _config_nginx_disable_packaged_default'
+  [ "$status" -eq 0 ]
+  [ ! -L "$d/sites-enabled/default" ]
+  [ -f "$d/sites-available/default" ]
+}
+
+@test "nginx preserves a modified default site and refuses to take it over" {
+  local d="$BATS_TEST_TMPDIR/nginx" bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$d/sites-enabled" "$d/sites-available"
+  printf 'user site\n' >"$d/sites-available/default"
+  ln -s "$d/sites-available/default" "$d/sites-enabled/default"
+  fake_tool "$bin" dpkg-query 'printf " /etc/nginx/sites-available/default packagehash\n"'
+  fake_tool "$bin" md5sum 'printf "modifiedhash  %s\n" "$1"'
+  cfprobe 'core_color_init; core_log_init; PATH="'"$bin"':$PATH"; ZBX_NGINX_DIR="'"$d"'";
+    _config_nginx_disable_packaged_default'
+  [ "$status" -ne 0 ]
+  [ -L "$d/sites-enabled/default" ]
+  [[ "$output" == *"customized"* ]]
+}
+
+@test "nginx preserves custom default files and links to other sites" {
+  local d="$BATS_TEST_TMPDIR/nginx"
+  mkdir -p "$d/sites-enabled" "$d/sites-available"
+  printf 'user site\n' >"$d/sites-enabled/default"
+  cfprobe 'core_color_init; core_log_init; ZBX_NGINX_DIR="'"$d"'"; _config_nginx_disable_packaged_default'
+  [ "$status" -ne 0 ]
+  [ -f "$d/sites-enabled/default" ]
+  mv "$d/sites-enabled/default" "$d/sites-available/user-site"
+  ln -s ../sites-available/user-site "$d/sites-enabled/default"
+  cfprobe 'core_color_init; core_log_init; ZBX_NGINX_DIR="'"$d"'"; _config_nginx_disable_packaged_default'
+  [ "$status" -ne 0 ]
+  [ -L "$d/sites-enabled/default" ]
 }
 
 @test "config_render_nginx is a no-op for apache" {

@@ -184,6 +184,7 @@ jobs:
           # become the default until a row has installed it end to end.
           - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
             zbxflag: ""
+            webflag: "--web nginx"
             expected_version: "7.0"
             setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
@@ -250,7 +251,7 @@ jobs:
               cp /root/zbx-install-credentials.txt /tmp/first-credentials
             fi
             set +e
-            bash dist/zbx-install.sh --express --yes ${{ matrix.zbxflag }} --admin-pass --generate-passwords --no-color --log-file /var/log/zbx.log >/tmp/install.out 2>&1
+            bash dist/zbx-install.sh --express --yes ${{ matrix.zbxflag }} ${{ matrix.webflag }} --admin-pass --generate-passwords --no-color --log-file /var/log/zbx.log >/tmp/install.out 2>&1
             rc=$?
             set -e
             echo "=== installer stdout (always shown) ==="
@@ -329,6 +330,12 @@ jobs:
             echo "landed on: $final_url"
             case "$final_url" in *setup.php*) echo "landed on the setup wizard"; exit 1 ;; esac
             grep -qi zabbix /tmp/frontend.html
+            if [[ "${{ matrix.webflag }}" == "--web nginx" ]]; then
+              for path in conf/zabbix.conf.php include/config.inc.php vendor/autoload.php; do
+                code="$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1/zabbix/$path")"
+                case "$code" in 403|404) ;; *) echo "protected frontend path exposed: $path ($code)"; exit 1 ;; esac
+              done
+            fi
             echo "=== verifying all 9 health checks passed and the summary printed ==="
             grep -q "All checks passed" /tmp/install.out
             grep -q "Admin login:" /tmp/install.out

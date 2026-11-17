@@ -85,6 +85,30 @@ when choosing a repository version.
 
 ## Other ways to run it
 
+### Small Ubuntu 24.04 demo
+
+For a fresh Ubuntu 24.04 VPS with 1GB RAM, the
+[small-demo recipe](examples/ubuntu-24.04-small-demo.sh) adds a persistent 2GB
+swap file when needed, installs Zabbix 7.0 with PostgreSQL and Nginx, and reduces
+server caches, worker counts, and PHP's simultaneous requests. It generates
+database and Admin passwords and saves backups before tuning. Existing swap
+is retained; an existing Zabbix server installation is refused.
+
+This is for one user and a few monitored hosts. Other applications on the VPS
+consume the same limited memory; swap does not replace RAM for a busy server.
+The installer default remains 7.0.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/momen-f/zbx-install/v0.4.3/examples/ubuntu-24.04-small-demo.sh -o /tmp/zabbix-demo.sh
+sudo bash /tmp/zabbix-demo.sh
+```
+
+Open `http://YOUR_VPS_IP/zabbix/` and use `Admin` with the generated password
+in `/root/zbx-install-credentials.txt`. Use an SSH tunnel or HTTPS for remote
+login rather than sending that password over public HTTP.
+
+### Development and direct downloads
+
 ```sh
 # Track the unreleased main branch instead of the latest release
 # (unchecksummed — for development only):

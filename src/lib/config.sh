@@ -38,6 +38,7 @@
 # (db_pgsql.sh), purely so bats can redirect every "/etc/zabbix/..." path
 # below into a fixture tmpdir without touching the real filesystem.
 : "${ZBX_ETC_DIR:=/etc/zabbix}"
+: "${ZBX_NGINX_DIR:=/etc/nginx}"
 
 # zabbix_server.conf's DBName/DBUser already ship uncommented with the
 # correct defaults ("zabbix"/"zabbix") — set_conf still runs on them so this
@@ -273,7 +274,42 @@ config_render_nginx() {
   # recognizes the already-uncommented line instead of appending a duplicate.
   _config_replace_or_append "$file" '^[[:space:]]*#?[[:space:]]*listen[[:space:]]' '        listen          80;' || return 1
   _config_replace_or_append "$file" '^[[:space:]]*#?[[:space:]]*server_name[[:space:]]' '        server_name     _;' || return 1
+  # The packaged nginx frontend is at /; keep the installer's /zabbix/ URLs usable.
+  local rewrite="        rewrite ^/zabbix(?:/(.*))?$ /\$1 last;"
+  if ! grep -qF "$rewrite" "$file"; then
+    grep -qE '^[[:space:]]*server[[:space:]]*\{' "$file" || return 1
+    _config_replace_or_append "$file" '^[[:space:]]*server[[:space:]]*\{' "server {"$'\n'"$rewrite" || return 1
+  fi
+  # The PHP regex must not override the package's vendor-directory access block.
+  if grep -qE '^[[:space:]]*location[[:space:]]+/vendor[[:space:]]*\{' "$file"; then
+    _config_replace_or_append "$file" '^[[:space:]]*location[[:space:]]+/vendor[[:space:]]*\{' '        location ^~ /vendor {' || return 1
+  fi
+  if [[ "$DETECT_FAMILY" == debian ]]; then
+    _config_nginx_disable_packaged_default || return 1
+  fi
   log INFO "uncommented listen/server_name in $file"
+}
+
+_config_nginx_disable_packaged_default() {
+  local site="$ZBX_NGINX_DIR/sites-enabled/default" target="$ZBX_NGINX_DIR/sites-available/default"
+  [[ -e "$site" || -L "$site" ]] || return 0
+  local link expected actual
+  link="$(readlink "$site")" || {
+    log ERROR "nginx default site is not a package symlink; configure the virtual hosts manually"
+    return 1
+  }
+  if [[ "$link" != "$target" && "$link" != ../sites-available/default ]] || [[ -L "$target" ]]; then
+    log ERROR "nginx default site is customized; refusing to disable it"
+    return 1
+  fi
+  expected="$(dpkg-query -W -f='${Conffiles}\n' nginx-common | awk '$1 == "/etc/nginx/sites-available/default" {print $2}')" || return 1
+  actual="$(md5sum "$site")" || return 1
+  if [[ -z "$expected" || "${actual%% *}" != "$expected" ]]; then
+    log ERROR "nginx default site is customized; refusing to disable it"
+    return 1
+  fi
+  # Keep the original file in sites-available; remove only its unchanged enablement link.
+  run rm -- "$site"
 }
 
 # --- frontend: skip the setup wizard (§12.4) ------------------------------------
