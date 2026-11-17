@@ -124,12 +124,16 @@ macos_agent_install() {
     # matches and exits early can SIGPIPE pkgutil, so the pipeline returns 141
     # and a correctly signed package is rejected. Capturing also keeps
     # pkgutil's own stderr instead of discarding the real reason.
-    sig="$(pkgutil --check-signature "$pkg" 2>&1)" || true
+    if ! sig="$(pkgutil --check-signature "$pkg" 2>&1)"; then
+      log ERROR "macOS package signature verification failed: $sig"
+      return 1
+    fi
     log INFO "pkgutil --check-signature: $sig"
     # Match below the first line only: pkgutil echoes the package path there,
     # so a whole-output match could be satisfied by the temp filename alone.
     if [[ "$sig" == *$'\n'* ]]; then chain="${sig#*$'\n'}"; else chain=""; fi
-    if [[ "$(printf '%s' "$chain" | tr '[:upper:]' '[:lower:]')" != *zabbix* ]]; then
+    if ! grep -Eq '^[[:space:]]*Status: signed by (a developer certificate issued by Apple|a certificate trusted by (Mac OS X|macOS))' <<<"$chain" ||
+      ! grep -Eq '^[[:space:]]*1\. Developer ID Installer: Zabbix SIA( \([A-Z0-9]+\))?[[:space:]]*$' <<<"$chain"; then
       log ERROR "macOS agent package is not signed by Zabbix — refusing to install (pkgutil: ${sig%%$'\n'*})"
       return 1
     fi

@@ -303,3 +303,27 @@ fake_tool() {
   run cat "$log"
   [[ "$output" == *"already rendered"* ]]
 }
+
+@test "set_conf preserves the original on a write or rename failure, even in a conditional" {
+  local f="$BATS_TEST_TMPDIR/atomic.conf"
+  printf 'Server=original\n' >"$f"
+  cfprobe 'printf() { [[ "${2:-}" != Server=replacement ]] || return 1; builtin printf "$@"; }
+    if set_conf "'"$f"'" Server replacement; then exit 99; fi'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$f")" = 'Server=original' ]
+  cfprobe 'mv() { return 1; }; if set_conf "'"$f"'" Server replacement; then exit 99; fi'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$f")" = 'Server=original' ]
+}
+
+@test "set_conf preserves permissions and follows a relative symlink" {
+  local f="$BATS_TEST_TMPDIR/target.conf" link="$BATS_TEST_TMPDIR/link.conf"
+  printf 'Server=original\n' >"$f"
+  chmod 640 "$f"
+  ln -s target.conf "$link"
+  cfprobe 'set_conf "'"$link"'" Server replacement'
+  [ "$status" -eq 0 ]
+  [ -L "$link" ]
+  [ "$(cat "$f")" = 'Server=replacement' ]
+  [ -n "$(find "$f" -perm 640)" ]
+}

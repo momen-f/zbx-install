@@ -112,3 +112,17 @@ make build   # bundle src/ -> dist/zbx-install.sh
 ```
 
 See [SPEC.md](SPEC.md) for the full specification.
+
+### Resuming a partial Linux installation
+
+Repeat the original installation command, adding `--resume` to skip the
+resume prompt. Unattended runs resume automatically. The installer saves the
+confirmed plan and generated DB/Admin passwords in
+`/var/lib/zbx-install/state.plan` (owner-only mode `0600`) before changing the
+host. This private recovery copy is separate from `--creds-file`, including
+when that option is `none`; do not share it or include it in support logs.
+Changed versions, components, database choices or supplied credentials are
+rejected rather than applied to completed steps. Uninstall or an interactive
+“start fresh” clears the recovery copy. Old progress files without this
+metadata cannot be resumed automatically; inspect the existing installation
+and recover its credentials before choosing a fresh run.

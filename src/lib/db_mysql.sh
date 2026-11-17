@@ -99,13 +99,17 @@ _db_mysql_unit_name() {
 # "connect as the zabbix user" checks (§13).
 _db_mysql_defaults_file() {
   local user="$1" password="$2" f
+  password="${password//\\/\\\\}"
+  password="${password//\"/\\\"}"
+  password="${password//$'\n'/\\n}"
+  password="${password//$'\r'/\\r}"
   f="$(mktemp -t zbx-mysql-defaults.XXXXXX)"
   chmod 600 "$f"
   ZBX_TEMPFILES+=("$f")
   {
     printf '[client]\n'
     printf 'user=%s\n' "$user"
-    printf 'password=%s\n' "$password"
+    printf 'password="%s"\n' "$password"
   } >"$f"
   printf '%s' "$f"
 }
@@ -138,10 +142,14 @@ _db_mysql_probe() {
 # for both server and proxy (matches Zabbix's own documented convention for
 # either) — only the database name (plan_db_name) differs.
 _db_mysql_create_and_grant() {
-  local dbname sql
+  local dbname sql password
   dbname="$(plan_db_name)"
-  sql="CREATE DATABASE IF NOT EXISTS ${dbname} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${ZBX_DB_PASSWORD}';
+  # Standard SQL literals preserve backslashes with this session mode.
+  password="${ZBX_DB_PASSWORD//\'/\'\'}"
+  core_register_secret "$password"
+  sql="SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_BACKSLASH_ESCAPES');
+CREATE DATABASE IF NOT EXISTS ${dbname} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER IF NOT EXISTS 'zabbix'@'localhost' IDENTIFIED BY '${password}';
 GRANT ALL PRIVILEGES ON ${dbname}.* TO 'zabbix'@'localhost';
 FLUSH PRIVILEGES;"
   printf '%s\n' "$sql" | run "${_DB_MYSQL_ARGS[@]}"

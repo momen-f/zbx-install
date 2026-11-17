@@ -15,7 +15,7 @@ setup() {
   TOOLDIR="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$TOOLDIR"
   local t src
-  for t in date awk sed grep df uname head tail tr cut cat sleep tput wc mktemp chmod; do
+  for t in date awk sed grep df uname head tail tr cut cat sleep tput wc mktemp chmod stat mv cp readlink rm; do
     src="$(command -v "$t" 2>/dev/null || true)"
     if [[ -n "$src" ]]; then ln -sf "$src" "$TOOLDIR/$t"; fi
   done
@@ -817,4 +817,46 @@ EOF
   [[ "$output" == *"8.0 (LTS)"* ]]
   [[ "$output" == *"/zabbix/8.0/ubuntu/"* ]]
   [[ "$output" == *"zabbix-server-mysql"* ]]
+}
+
+@test "macOS real flow exits 6 when the installed agent does not listen" {
+  fake curl 'while [[ "$1" != -o ]]; do shift; done; printf "xar!fake" > "$2"'
+  fake pkgutil 'printf "Package: test.pkg\nStatus: signed by a developer certificate issued by Apple\n1. Developer ID Installer: Zabbix SIA (A1B2C3D4E5)\n"'
+  fake installer 'exit 0'
+  fake launchctl 'exit 0'
+  fake lsof 'exit 1'
+  run env -i PATH="$TOOLDIR" HOME="$BATS_TEST_TMPDIR" \
+    ZBX_UNAME_S=Darwin ZBX_UNAME_M=arm64 ZBX_MACOS_AGENT_CONF="$ETCDIR/zabbix_agentd.conf" \
+    STATE_FILE="$BATS_TEST_TMPDIR/state" ZBX_HEALTH_PORT_TRIES=1 \
+    "$BASH_BIN" "$DIST" --express --yes --no-color --log-file "$BATS_TEST_TMPDIR/mac.log"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"checks failed"* ]]
+  [[ "$output" != *"All checks passed"* ]]
+}
+
+@test "resume after database provisioning restores secrets and rejects a different version" {
+  fake curl "$FAKE_CURL_FRONTEND_200"'
+    exit 0'
+  fake dpkg 'exit 0'
+  fake apt-cache 'exit 0'
+  fake apt-get "$(mysql_appears_on_install)exit 0"
+  fake_db_mysql_success
+  fake_ss_ports
+  rm "$ETCDIR/zabbix_server.conf"
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes --creds-file "$BATS_TEST_TMPDIR/creds"
+  [ "$status" -eq 5 ]
+  grep -q '^db=done' "$BATS_TEST_TMPDIR/state"
+  local password
+  password="$(sed -n 's/^Database password: //p' "$BATS_TEST_TMPDIR/creds")"
+  [ -n "$password" ]
+  fake zabbix_server 'exit 0'
+  : >"$ETCDIR/zabbix_server.conf"
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes --resume --zabbix-version 8.0 --creds-file "$BATS_TEST_TMPDIR/creds"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"resume plan differs"* ]]
+  zx os-release.ubuntu2404 meminfo.4gb --express --yes --resume --creds-file "$BATS_TEST_TMPDIR/creds"
+  [ "$status" -eq 0 ]
+  grep -qxF "DBPassword=$password" "$ETCDIR/zabbix_server.conf"
+  grep -qxF "Database password: $password" "$BATS_TEST_TMPDIR/creds"
+  ! grep -qF "$password" "$BATS_TEST_TMPDIR/zbx.log"
 }

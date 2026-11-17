@@ -190,6 +190,7 @@ core_state_has_progress() {
 # fresh" resume choice (§14), and also used by uninstall so a later reinstall
 # doesn't skip steps a removed package set makes newly-undone.
 core_state_clear() {
+  rm -f "${STATE_FILE}.plan" || return 1
   { : >"$STATE_FILE"; } 2>/dev/null || true
 }
 

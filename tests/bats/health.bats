@@ -141,7 +141,7 @@ fake_tool() {
   run cat "$defaults_file"
   [[ "$output" == *"user=zabbix"* ]]
   [[ "$output" != *"user=root"* ]]
-  [[ "$output" == *"password=s3cr3t-health-check"* ]]
+  [[ "$output" == *'password="s3cr3t-health-check"'* ]]
 }
 
 @test "_health_check_db_reachable (pgsql) uses peer auth as the zabbix OS user" {

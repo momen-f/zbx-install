@@ -379,3 +379,30 @@ pkgutil_signed_by() {
   [[ "$sig" != *"downloading the agent package failed"* ]]
   [[ "$sig" != *"not a macOS package"* ]]
 }
+
+@test "macos_agent_install rejects a failed verifier even with a Zabbix certificate" {
+  local d="$BATS_TEST_TMPDIR/badsig"
+  tool_farm "$d" "$BATS_TEST_TMPDIR/badsig-base"
+  fake_tool "$d" pkgutil 'printf "Package: test.pkg\nStatus: invalid\n1. Developer ID Installer: Zabbix SIA (A1B2C3D4E5)\n"; exit 1'
+  rprobe "$d" 'macos_agent_install'
+  [ "$status" -ne 0 ]
+  [ ! -e "$d/installer.calls" ]
+}
+
+@test "macos_agent_install rejects a publisher merely containing the name Zabbix" {
+  local d="$BATS_TEST_TMPDIR/wrongsig"
+  tool_farm "$d" "$BATS_TEST_TMPDIR/wrongsig-base"
+  pkgutil_signed_by "$d" 'Not Zabbix SIA (A1B2C3D4E5)'
+  rprobe "$d" 'macos_agent_install'
+  [ "$status" -ne 0 ]
+  [ ! -e "$d/installer.calls" ]
+}
+
+@test "macos_agent_install rejects an untrusted certificate even if pkgutil exits zero" {
+  local d="$BATS_TEST_TMPDIR/untrustedsig"
+  tool_farm "$d" "$BATS_TEST_TMPDIR/untrustedsig-base"
+  fake_tool "$d" pkgutil 'printf "Package: test.pkg\nStatus: signed by an untrusted certificate\n1. Developer ID Installer: Zabbix SIA (A1B2C3D4E5)\n"; exit 0'
+  rprobe "$d" 'macos_agent_install'
+  [ "$status" -ne 0 ]
+  [ ! -e "$d/installer.calls" ]
+}

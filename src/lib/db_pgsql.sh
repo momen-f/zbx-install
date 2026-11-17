@@ -56,8 +56,10 @@ _db_pgsql_create_role_and_db() {
   if ! _db_pgsql_role_exists; then
     run sudo -u postgres createuser zabbix || return 1
   fi
-  printf "ALTER USER zabbix PASSWORD '%s';\n" "$ZBX_DB_PASSWORD" |
-    run sudo -u postgres psql || return 1
+  local password="${ZBX_DB_PASSWORD//\'/\'\'}"
+  core_register_secret "$password"
+  printf "SET standard_conforming_strings = on;\nALTER USER zabbix PASSWORD '%s';\n" "$password" |
+    run sudo -u postgres psql -v ON_ERROR_STOP=1 || return 1
   if ! _db_pgsql_database_exists; then
     run sudo -u postgres createdb -O zabbix zabbix || return 1
   fi
@@ -92,11 +94,13 @@ _db_pgsql_add_hba_fallback() {
 # reaches the environment — never the password itself (§10, same pattern as
 # MySQL's defaults-extra-file).
 _db_pgsql_pgpass_file() {
-  local f
+  local f password="$ZBX_DB_PASSWORD"
+  password="${password//\\/\\\\}"
+  password="${password//:/\\:}"
   f="$(mktemp -t zbx-pgpass.XXXXXX)"
   chmod 600 "$f"
   ZBX_TEMPFILES+=("$f")
-  printf 'localhost:*:zabbix:zabbix:%s\n' "$ZBX_DB_PASSWORD" >"$f"
+  printf 'localhost:*:zabbix:zabbix:%s\n' "$password" >"$f"
   printf '%s' "$f"
 }
 

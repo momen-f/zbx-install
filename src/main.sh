@@ -21,6 +21,8 @@ source "$_SRC_DIR/lib/detect.sh" # @dev-source
 source "$_SRC_DIR/lib/recommend.sh" # @dev-source
 # shellcheck source=lib/creds.sh
 source "$_SRC_DIR/lib/creds.sh" # @dev-source
+# shellcheck source=lib/resume.sh
+source "$_SRC_DIR/lib/resume.sh" # @dev-source
 # shellcheck source=lib/configfile.sh
 source "$_SRC_DIR/lib/configfile.sh" # @dev-source
 # shellcheck source=lib/repo.sh
@@ -283,7 +285,7 @@ guard_arch() {
 
 # guard_existing — never upgrade in v1; repair/uninstall land in Phase 7 (§8).
 guard_existing() {
-  if [[ "$DETECT_ZBX_PRESENT" == "no" ]]; then return 0; fi
+  if [[ "$DETECT_ZBX_PRESENT" == "no" || "$ZBX_RESUMING" == 1 ]]; then return 0; fi
   log WARN "existing Zabbix installation detected"
   if [[ "$UNATTENDED" == "1" ]]; then
     die "existing Zabbix detected — repair/uninstall flows arrive in Phase 7; aborting" 3
@@ -525,6 +527,9 @@ resolve_tz() {
 
 # --- plan / confirm / pipeline --------------------------------------------------
 prepare_plan() {
+  # Read indirectly through RESUME_PLAN_KEYS.
+  # shellcheck disable=SC2034
+  ZBX_RESUME_MODE="$1"
   resolve_plan
   case "$1" in
     agent-only)
@@ -555,6 +560,8 @@ prepare_plan() {
   fi
   resolve_update
   resolve_tz
+  resume_plan_restore || die "could not read the recovery plan" 3
+  guard_existing
   creds_collect
   creds_collect_admin_pass
 }
@@ -579,6 +586,7 @@ plan_confirm() {
 # re-enters the mode menu in that case.
 run_pipeline() {
   core_state_init
+  resume_plan_save || die "cannot save recovery plan and credentials; installation not started" 5
   local label="Running the implemented steps (repo, packages"
   if plan_has server || (plan_has proxy && [[ "$PLAN_DB_ENGINE" != "sqlite3" ]]); then
     label+=", database"
@@ -732,6 +740,7 @@ macos_main_flow() {
   # on an empty result set. The health summary drives the exit code (6 on a
   # failed check, e.g. the agent never started listening).
   macos_agent_run
+  _health_print_report || return 6
   if health_print_summary; then return 0; else return 6; fi
 }
 
@@ -814,7 +823,6 @@ main() {
     macos_main_flow || mac_rc=$?
     exit "$mac_rc"
   fi
-  guard_existing
   guard_network
   recommend_run
   main_flow

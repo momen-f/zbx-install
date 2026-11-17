@@ -62,7 +62,7 @@ fake_tool() {
 @test "_db_mysql_auth_setup builds a chmod-600 defaults file when an admin password is set" {
   mprobe 'ZBX_DB_ADMIN_PASSWORD="s3cr3t"; _db_mysql_auth_setup;
     f="${_DB_MYSQL_ARGS[1]#--defaults-extra-file=}";
-    [[ -f "$f" ]] && grep -q "password=s3cr3t" "$f" && find "$f" -perm 600 | grep -q . && echo ok'
+    [[ -f "$f" ]] && grep -q '"'"'password="s3cr3t"'"'"' "$f" && find "$f" -perm 600 | grep -q . && echo ok'
   [ "$status" -eq 0 ]
   [[ "$output" == *"ok"* ]]
 }

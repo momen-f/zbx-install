@@ -63,7 +63,7 @@ set_conf() {
     log ERROR "cannot set $key — $file does not exist"
     return 1
   fi
-  _config_replace_or_append "$file" "^#? ?${key}=" "${key}=${value}"
+  _config_replace_or_append "$file" "^#? ?${key}=" "${key}=${value}" || return 1
   log INFO "set $key in $file"
 }
 
@@ -73,21 +73,33 @@ set_conf() {
 # set_conf above.
 _config_replace_or_append() {
   local file="$1" pattern="$2" line="$3" tmp cur found=0
-  tmp="$(mktemp -t zbx-conf.XXXXXX)"
+  local link depth=0
+  # Replace the symlink target, not the link shipped by some distro packages.
+  [[ "$file" == */* ]] || file="./$file"
+  while [[ -L "$file" ]]; do
+    ((depth < 40)) || return 1
+    depth=$((depth + 1))
+    link="$(readlink "$file")" || return 1
+    if [[ "$link" == /* ]]; then file="$link"; else file="${file%/*}/$link"; fi
+  done
+  tmp="$(mktemp "${file%/*}/.zbx-conf.XXXXXX")" || return 1
   ZBX_TEMPFILES+=("$tmp")
+  cp -p "$file" "$tmp" || return 1
   while IFS= read -r cur || [[ -n "$cur" ]]; do
     if [[ "$cur" =~ $pattern ]]; then
       if ((!found)); then
-        printf '%s\n' "$line"
+        printf '%s\n' "$line" || return 1
         found=1
       fi
     else
-      printf '%s\n' "$cur"
+      printf '%s\n' "$cur" || return 1
     fi
-  done <"$file" >"$tmp"
-  ((found)) || printf '%s\n' "$line" >>"$tmp"
-  cat "$tmp" >"$file"
-  rm -f "$tmp"
+  done <"$file" >"$tmp" || return 1
+  if ((!found)); then printf '%s\n' "$line" >>"$tmp" || return 1; fi
+  if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+    chcon --reference="$file" "$tmp" || return 1
+  fi
+  mv -f "$tmp" "$file"
 }
 
 # _config_php_escape VALUE — escape backslash and single-quote for embedding
@@ -229,9 +241,9 @@ config_set_php_tz() {
     return 0
   fi
   if [[ "$style" == "fpm" ]]; then
-    _config_replace_or_append "$file" '^[[:space:]]*php_value\[date\.timezone\]' "php_value[date.timezone] = $PLAN_TZ"
+    _config_replace_or_append "$file" '^[[:space:]]*php_value\[date\.timezone\]' "php_value[date.timezone] = $PLAN_TZ" || return 1
   else
-    _config_replace_or_append "$file" '^[[:space:]]*php_value date\.timezone' "php_value date.timezone $PLAN_TZ"
+    _config_replace_or_append "$file" '^[[:space:]]*php_value date\.timezone' "php_value date.timezone $PLAN_TZ" || return 1
   fi
   log INFO "set PHP date.timezone=$PLAN_TZ in $file"
 }
@@ -258,8 +270,8 @@ config_render_nginx() {
   fi
   # Pattern matches with or without a leading "#" so a second run (resume)
   # recognizes the already-uncommented line instead of appending a duplicate.
-  _config_replace_or_append "$file" '^[[:space:]]*#?[[:space:]]*listen[[:space:]]' '        listen          80;'
-  _config_replace_or_append "$file" '^[[:space:]]*#?[[:space:]]*server_name[[:space:]]' '        server_name     _;'
+  _config_replace_or_append "$file" '^[[:space:]]*#?[[:space:]]*listen[[:space:]]' '        listen          80;' || return 1
+  _config_replace_or_append "$file" '^[[:space:]]*#?[[:space:]]*server_name[[:space:]]' '        server_name     _;' || return 1
   log INFO "uncommented listen/server_name in $file"
 }
 
