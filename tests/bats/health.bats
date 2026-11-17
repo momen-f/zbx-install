@@ -239,6 +239,7 @@ fake_tool() {
 }
 
 # --- health_run_checks orchestration -------------------------------------------------
+# Fake the optional zabbix_get so a locally installed agent cannot affect these tests.
 
 @test "health_run_checks does nothing under DRY_RUN" {
   hprobe 'core_color_init; core_log_init; DRY_RUN=1; health_run_checks; echo "rc=$?"'
@@ -250,17 +251,19 @@ fake_tool() {
   local d="$BATS_TEST_TMPDIR/t12"
   fake_tool "$d" systemctl 'exit 0'
   fake_tool "$d" ss 'printf "h\nLISTEN\n"'
+  fake_tool "$d" zabbix_get 'printf 1'
   hprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
     PLAN_COMPONENTS=agent; PLAN_AGENT_TYPE=zabbix-agent2;
     health_run_checks; printf "%d" "${#ZBX_HEALTH_RESULTS[@]}"'
   [ "$status" -eq 0 ]
-  [ "$output" = "2" ]
+  [ "$output" = "3" ]
 }
 
 @test "health_run_checks returns 0 and prints nothing extra when every applicable check passes" {
   local d="$BATS_TEST_TMPDIR/t13"
   fake_tool "$d" systemctl 'exit 0'
   fake_tool "$d" ss 'printf "h\nLISTEN\n"'
+  fake_tool "$d" zabbix_get 'printf 1'
   hprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
     PLAN_COMPONENTS=agent; PLAN_AGENT_TYPE=zabbix-agent2;
     health_run_checks; echo "rc=$?"'
@@ -272,11 +275,12 @@ fake_tool() {
   local d="$BATS_TEST_TMPDIR/t14"
   fake_tool "$d" systemctl 'exit 3'
   fake_tool "$d" ss 'printf "h\n"'
+  fake_tool "$d" zabbix_get 'exit 1'
   hprobe 'core_color_init; LOG_FILE="'"$BATS_TEST_TMPDIR"'/t14.log"; core_log_init; DRY_RUN=0;
     PATH="'"$d"':$PATH"; PLAN_COMPONENTS=agent; PLAN_AGENT_TYPE=zabbix-agent2;
     health_run_checks'
   [ "$status" -eq 1 ]
-  [[ "$output" == *"of 2 checks failed"* ]]
+  [[ "$output" == *"3 of 3 checks failed"* ]]
   [[ "$output" == *"journalctl -u zabbix-agent2"* ]]
 }
 
