@@ -296,7 +296,7 @@ SELinux enforcing (RHEL): ensure `zabbix-selinux-policy` installed, `setsebool -
 
 ### 12.6 Service start (`services.sh`)
 
-`systemctl enable --now` in order: DB → `zabbix-server` → web (`httpd`/`apache2`/`nginx` + `php-fpm` where used) → `zabbix-agent2`. After each, poll `systemctl is-active` up to 15 s; on failure dump `journalctl -u UNIT -n 30 --no-pager` into the log and continue to health checks (which will fail loudly with context). A **proxy** install (§15.9) starts DB (MySQL-backed only) → `zabbix-proxy`; the unit is always `zabbix-proxy` regardless of backend, and a SQLite3-backed proxy has no DB unit to start.
+`systemctl enable`, then `systemctl restart`, in order: DB → `zabbix-server` → web (`httpd`/`apache2`/`nginx` + `php-fpm` where used) → `zabbix-agent2`. Restart loads the rendered configuration even when package installation already started the service. After each, poll `systemctl is-active` up to 15 s; on failure dump `journalctl -u UNIT -n 30 --no-pager` into the log and continue to health checks (which will fail loudly with context). A **proxy** install (§15.9) starts DB (MySQL-backed only) → `zabbix-proxy`; the unit is always `zabbix-proxy` regardless of backend, and a SQLite3-backed proxy has no DB unit to start.
 
 ---
 

@@ -186,7 +186,8 @@ jobs:
             zbxflag: ""
             webflag: "--web nginx"
             expected_version: "7.0"
-            setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates"
+            # Real Ubuntu starts nginx during package installation, before we render config.
+            setup: "apt-get update -qq && apt-get install -y -qq curl ca-certificates nginx && systemctl start nginx"
             verify: "dpkg -l zabbix-agent2 zabbix-server-mysql zabbix-frontend-php"
           - image: "geerlingguy/docker-ubuntu2404-ansible:latest"
             zbxflag: "--zabbix-version 8.0"

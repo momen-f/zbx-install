@@ -76,6 +76,20 @@ fake_tool() {
   [ "$status" -eq 0 ]
 }
 
+@test "_services_start_unit applies new configuration to an already-active service" {
+  local d="$BATS_TEST_TMPDIR/running" loaded="$BATS_TEST_TMPDIR/loaded"
+  printf 'old configuration\n' >"$loaded"
+  fake_tool "$d" systemctl 'case "$1" in
+    restart) printf "new configuration\n" >"'"$loaded"'" ;;
+    is-active) echo active ;;
+  esac'
+  svprobe 'core_color_init; core_log_init; DRY_RUN=0; PATH="'"$d"':$PATH";
+    _services_start_unit nginx'
+  [ "$status" -eq 0 ]
+  run cat "$loaded"
+  [ "$output" = "new configuration" ]
+}
+
 # Real timing on purpose (~15s): this is the one path that actually exercises
 # the spec's "poll up to 15s" contract end to end, including the journalctl
 # dump on timeout — worth the wall-clock cost once.
@@ -122,7 +136,7 @@ fake_tool() {
   fake_tool "$d" systemctl '
     case "$1 $2" in
       "list-unit-files mariadb.service") echo "mariadb.service enabled" ;;
-      "enable --now") echo "ENABLE:$3" >>"'"$log"'" ;;
+      "enable "*) echo "ENABLE:$2" >>"'"$log"'" ;;
       "is-active") exit 0 ;;
     esac
     exit 0
@@ -142,7 +156,7 @@ fake_tool() {
   local d="$BATS_TEST_TMPDIR/t8" log="$BATS_TEST_TMPDIR/t8.log"
   fake_tool "$d" systemctl '
     case "$1 $2" in
-      "enable --now") echo "ENABLE:$3" >>"'"$log"'" ;;
+      "enable "*) echo "ENABLE:$2" >>"'"$log"'" ;;
       "is-active") exit 0 ;;
     esac
     exit 0

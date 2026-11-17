@@ -6,7 +6,7 @@
 # Contract:
 #   inputs  : PLAN_DB_ENGINE, PLAN_WEB_SERVER, PLAN_AGENT_TYPE (recommend.sh),
 #             DETECT_FAMILY (detect.sh).
-#   outputs : systemctl enable --now, in order, for every unit this plan
+#   outputs : systemctl enable + restart, in order, for every unit this plan
 #             needs; polls is-active up to 15s per unit. A single unit not
 #             becoming active is logged (journalctl dump) and does NOT stop
 #             the sequence — health checks (Phase 6) surface it with context,
@@ -33,11 +33,15 @@ _services_wait_active() {
 _services_start_unit() {
   local unit="$1"
   if [[ "$DRY_RUN" == "1" ]]; then
-    log INFO "DRY-RUN: enable --now $unit"
+    log INFO "DRY-RUN: enable and restart $unit"
     return 0
   fi
-  if ! run systemctl enable --now "$unit"; then
+  if ! run systemctl enable "$unit"; then
     log WARN "enabling $unit failed — see the log"
+  fi
+  # Packages may start services before config rendering; restart loads our settings.
+  if ! run systemctl restart "$unit"; then
+    log WARN "restarting $unit failed — see the log"
   fi
   if ! _services_wait_active "$unit"; then
     log WARN "service $unit is not active after 15s — dumping the last 30 journal lines"
