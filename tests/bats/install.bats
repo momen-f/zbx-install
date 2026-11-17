@@ -260,6 +260,12 @@ exec "'"$REAL_SHA256SUM"'" ${args[@]+"${args[@]}"}
 # the bundle under a bash that can't run it. FAKE_BASH_MAJOR drives the
 # ZBX_BOOTSTRAP_BASH_MAJOR test seam; uname is faked to Darwin.
 @test "Darwin + old bash + no modern bash prints brew guidance and exits 3" {
+  local candidate
+  for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x "$candidate" ]] && "$candidate" -c '((BASH_VERSINFO >= 4))'; then
+      skip "a real Homebrew bash makes the no-modern-bash scenario unavailable"
+    fi
+  done
   fake_curl good
   fake uname 'printf "Darwin\n"'
   # On this Linux CI box the degenerate "$(brew --prefix)/bin/bash" candidate

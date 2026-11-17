@@ -386,7 +386,7 @@ rprobe() {
 pwarn() {
   rprobe 'USE_COLOR=0; core_color_init
     OS_RELEASE_FILE="'"$BATS_TEST_DIRNAME"'/../fixtures/os-release.'"$1"'"
-    detect_os >/dev/null 2>&1; detect_family
+    ZBX_UNAME_S=Linux; detect_os >/dev/null 2>&1; detect_family
     PLAN_COMPONENTS=server,frontend,agent PLAN_ZBX_VERSION='"$2"'
     REC_SIZING=ok DETECT_ARCH_OK=yes DETECT_IS_CONTAINER=no DETECT_ZBX_PRESENT=no DETECT_PORT_CONFLICTS=none
     plan_report_warnings'
@@ -395,7 +395,7 @@ pwarn() {
 @test "_distro_php_ceiling knows each supported distro it can vouch for, and nothing else" {
   rprobe 'for f in ubuntu2204 ubuntu2404 debian12 debian13 rocky9 almalinux8 amzn2023 leap156; do
       OS_RELEASE_FILE="'"$BATS_TEST_DIRNAME"'/../fixtures/os-release.$f"
-      detect_os >/dev/null 2>&1; detect_family
+      ZBX_UNAME_S=Linux; detect_os >/dev/null 2>&1; detect_family
       printf "%s=%s " "$f" "$(_distro_php_ceiling)"
     done'
   # SUSE is deliberately unknown: no warning beats a wrong one.
@@ -445,7 +445,7 @@ pwarn() {
 @test "an agent-only plan never gets the PHP warning (no frontend)" {
   rprobe 'USE_COLOR=0; core_color_init
     OS_RELEASE_FILE="'"$BATS_TEST_DIRNAME"'/../fixtures/os-release.ubuntu2204"
-    detect_os >/dev/null 2>&1; detect_family
+    ZBX_UNAME_S=Linux; detect_os >/dev/null 2>&1; detect_family
     PLAN_COMPONENTS=agent PLAN_ZBX_VERSION=8.0
     REC_SIZING=ok DETECT_ARCH_OK=yes DETECT_IS_CONTAINER=no DETECT_ZBX_PRESENT=no DETECT_PORT_CONFLICTS=none
     plan_report_warnings'

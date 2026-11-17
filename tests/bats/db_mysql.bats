@@ -289,6 +289,7 @@ fake_tool() {
   # here became `tee -a FILE zabbix` and wrote a file named "zabbix" into the
   # current directory — the repo root — on every run.
   mrprobe 'DRY_RUN=0 LOG_FILE="'"$d"'/log"
+    zcat() { gzip -dc "$@"; } # macOS zcat expects .Z; match Linux gzip semantics.
     _DB_MYSQL_ARGS=(sh -c "cat >>\"\$0\"" "'"$d"'/fed")
     _db_mysql_import_pipe "'"$d"'/plain.sql" zabbix
     _db_mysql_import_pipe "'"$d"'/comp.sql.gz" zabbix
