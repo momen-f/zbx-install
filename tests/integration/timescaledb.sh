@@ -16,7 +16,7 @@ printf '%s\n' 'deb [signed-by=/usr/share/keyrings/timescaledb.gpg] https://packa
 # Pin a release supported by both tested Zabbix versions; installation is the installer's job.
 cat >/etc/apt/preferences.d/timescaledb <<'PINS'
 Package: timescaledb-2-postgresql-16 timescaledb-2-loader-postgresql-16
-Pin: version 2.30.2*
+Pin: version 2.29.2*
 Pin-Priority: 1001
 PINS
 apt-get update -qq
@@ -41,7 +41,9 @@ bash dist/zbx-install.sh --config /tmp/timescale.conf --yes --no-color \
 grep -q 'All checks passed' /tmp/timescale-install.out
 zabbix_server --version | head -n 1 | grep -F "$version."
 dpkg-query -W -f='${Status}\n' timescaledb-2-postgresql-16 | grep -qx 'install ok installed'
-test "$(sudo -u postgres psql -X -d zabbix -tAc "SELECT extversion FROM pg_extension WHERE extname='timescaledb'")" = 2.30.2
+test "$(sudo -u postgres psql -X -d zabbix -tAc "SELECT extversion FROM pg_extension WHERE extname='timescaledb'")" = 2.29.2
+# Buffer tuning is saved for the next restart, as reported by the installer.
+test "$(sudo -u postgres psql -X -tAc "SELECT COUNT(*) FROM pg_file_settings WHERE name='shared_buffers' AND sourcefile LIKE '%/postgresql.auto.conf' AND setting IN ('128MB','512MB','1GB','2GB')")" = 1
 libraries="$(sudo -u postgres psql -X -tAc 'SHOW shared_preload_libraries')"
 [[ "$libraries" == *pg_stat_statements* && "$libraries" == *timescaledb* ]]
 test "$(sudo -u zabbix psql -X -d zabbix -tAc "SELECT COUNT(*) FROM timescaledb_information.hypertables WHERE hypertable_name IN ('history','history_uint','trends','trends_uint')")" = 4
@@ -70,4 +72,4 @@ api="$(curl -fsS -H 'Content-Type: application/json' \
   --data '{"jsonrpc":"2.0","method":"apiinfo.version","params":{},"id":1}' \
   http://127.0.0.1/zabbix/api_jsonrpc.php)"
 [[ "$api" == *'"result":"'"$version."* ]]
-printf 'Zabbix %s + PostgreSQL 16 + TimescaleDB 2.30.2: hypertables, compression settings, writes and services passed\n' "$version"
+printf 'Zabbix %s + PostgreSQL 16 + TimescaleDB 2.29.2: hypertables, compression settings, writes and services passed\n' "$version"

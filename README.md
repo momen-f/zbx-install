@@ -77,7 +77,7 @@ third-party repository. It selects a package for the running PostgreSQL major,
 preserves other preloaded extensions, restarts PostgreSQL when needed, and
 imports Zabbix's TimescaleDB schema. Setup failures stop database provisioning.
 
-CI tests Ubuntu 24.04 with PostgreSQL 16 and TimescaleDB 2.30.2 against both
+CI tests Ubuntu 24.04 with PostgreSQL 16 and TimescaleDB 2.29.2 against both
 the default Zabbix 7.0 and opt-in 8.0, including hypertables, compression settings,
 history writes, and the running server/frontend. See
 [Zabbix's TimescaleDB requirements](https://www.zabbix.com/documentation/7.0/en/manual/installation/requirements#database-management-system)

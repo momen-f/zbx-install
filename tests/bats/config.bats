@@ -124,6 +124,37 @@ fake_tool() {
   [[ "$output" == *"DBPassword=s3cr3t-argv-check"* ]]
 }
 
+# --- config_apply_db_sizing ----------------------------------------------------------
+
+@test "PostgreSQL sizing quotes valid memory units for every preset and stops on SQL errors" {
+  local preset expected
+  for preset in warn small medium large; do
+    case "$preset" in
+      warn) expected=128MB ;;
+      small) expected=512MB ;;
+      medium) expected=1GB ;;
+      large) expected=2GB ;;
+    esac
+    cfprobe 'core_color_init; LOG_FILE="'"$BATS_TEST_TMPDIR/$preset.log"'"; core_log_init; DRY_RUN=0;
+      PLAN_DB_ENGINE=pgsql; PLAN_SIZING='"$preset"';
+      sudo() { printf "ARGS:%s\n" "$*"; cat; }
+      config_apply_db_sizing; cat "$LOG_FILE"'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ARGS:-u postgres psql -X -v ON_ERROR_STOP=1"* ]]
+    [[ "$output" == *"ALTER SYSTEM SET shared_buffers = '$expected';"* ]]
+  done
+}
+
+@test "PostgreSQL sizing failure propagates without logging success in a conditional" {
+  cfprobe 'core_color_init; LOG_FILE="'"$BATS_TEST_TMPDIR/failure.log"'"; core_log_init; DRY_RUN=0;
+    PLAN_DB_ENGINE=pgsql; PLAN_SIZING=small;
+    sudo() { cat >/dev/null; return 3; }
+    if config_apply_db_sizing; then exit 99; fi
+    cat "$LOG_FILE"'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"via ALTER SYSTEM"* ]]
+}
+
 # --- config_render_frontend ---------------------------------------------------------
 
 @test "config_render_frontend writes MYSQL/POSTGRESQL, escapes a quote in the password" {

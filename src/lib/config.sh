@@ -156,8 +156,9 @@ config_apply_db_sizing() {
     return 0
   fi
   if [[ "$PLAN_DB_ENGINE" == "pgsql" ]]; then
-    printf 'ALTER SYSTEM SET shared_buffers = %s;\n' "${sv[1]}" | run sudo -u postgres psql || return 1
-    log INFO "set shared_buffers=${sv[1]} via ALTER SYSTEM — restart postgresql to apply"
+    printf "ALTER SYSTEM SET shared_buffers = '%sB';\n" "${sv[1]}" |
+      run sudo -u postgres psql -X -v ON_ERROR_STOP=1 || return 1
+    log INFO "set shared_buffers=${sv[1]}B via ALTER SYSTEM — restart postgresql to apply"
     return 0
   fi
   local dir
