@@ -14,23 +14,25 @@ ZBX_DB_ADMIN_PASSWORD=""
 trap core_on_exit EXIT
 case "$1" in
   mysql)
+    defaults=""
     _db_mysql_auth_setup
     _db_mysql_create_and_grant
-    defaults="$(_db_mysql_defaults_file zabbix "$ZBX_DB_PASSWORD")"
-    ZBX_TEMPFILES+=("$defaults")
+    _db_mysql_defaults_file defaults zabbix "$ZBX_DB_PASSWORD"
     test "$(mysql --defaults-extra-file="$defaults" -N zabbix -e 'SELECT 1')" = 1
     ;;
   pgsql)
+    pgpass=""
     sudo() {
       shift 2
       gosu postgres "$@"
     }
     _db_pgsql_create_role_and_db
-    pgpass="$(_db_pgsql_pgpass_file)"
-    ZBX_TEMPFILES+=("$pgpass")
+    _db_pgsql_pgpass_file pgpass
     test "$(PGPASSFILE="$pgpass" psql -h localhost -U zabbix -d zabbix -tAc 'SELECT 1')" = 1
     ;;
   *) exit 2 ;;
 esac
 if grep -qF "$ZBX_DB_PASSWORD" "$LOG_FILE"; then exit 1; fi
+core_on_exit
+for credential_file in "${ZBX_TEMPFILES[@]}"; do test ! -e "$credential_file"; done
 printf 'Password round-trip passed for %s\n' "$1"

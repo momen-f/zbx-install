@@ -93,25 +93,22 @@ _db_mysql_unit_name() {
   return 1
 }
 
-# _db_mysql_defaults_file USER PASSWORD — mktemp [client] file, chmod 600,
-# cleaned up by the EXIT trap. Never pass a password as a command argument
+# _db_mysql_defaults_file OUTVAR USER PASSWORD — mktemp [client] file, chmod 600,
+# Call directly so cleanup registration stays in the caller's shell.
+# Never pass a password as a command argument
 # (§10 — visible in ps). Shared by the admin auth path here and health.sh's
 # "connect as the zabbix user" checks (§13).
 _db_mysql_defaults_file() {
-  local user="$1" password="$2" f
+  local user="$2" password="$3" f
   password="${password//\\/\\\\}"
   password="${password//\"/\\\"}"
   password="${password//$'\n'/\\n}"
   password="${password//$'\r'/\\r}"
-  f="$(mktemp -t zbx-mysql-defaults.XXXXXX)"
-  chmod 600 "$f"
+  f="$(mktemp -t zbx-mysql-defaults.XXXXXX)" || return 1
   ZBX_TEMPFILES+=("$f")
-  {
-    printf '[client]\n'
-    printf 'user=%s\n' "$user"
-    printf 'password="%s"\n' "$password"
-  } >"$f"
-  printf '%s' "$f"
+  chmod 600 "$f" || return 1
+  printf '[client]\nuser=%s\npassword="%s"\n' "$user" "$password" >"$f" || return 1
+  printf -v "$1" '%s' "$f"
 }
 
 _DB_MYSQL_ARGS=()
@@ -122,7 +119,7 @@ _DB_MYSQL_ARGS=()
 _db_mysql_auth_setup() {
   if [[ -n "$ZBX_DB_ADMIN_PASSWORD" ]]; then
     local defaults_file
-    defaults_file="$(_db_mysql_defaults_file root "$ZBX_DB_ADMIN_PASSWORD")"
+    _db_mysql_defaults_file defaults_file root "$ZBX_DB_ADMIN_PASSWORD" || return 1
     _DB_MYSQL_ARGS=(mysql "--defaults-extra-file=$defaults_file")
   else
     _DB_MYSQL_ARGS=(mysql -u root)
@@ -262,8 +259,7 @@ db_mysql_provision() {
   done
 
   while true; do
-    _db_mysql_auth_setup
-    _db_mysql_probe && break
+    _db_mysql_auth_setup && _db_mysql_probe && break
     if [[ -z "$ZBX_DB_ADMIN_PASSWORD" ]]; then
       err_menu db "connecting as root over unix_socket failed — this install needs the existing admin password"
     else

@@ -89,7 +89,7 @@ _db_pgsql_add_hba_fallback() {
   run sudo -u postgres psql -c 'SELECT pg_reload_conf()'
 }
 
-# _db_pgsql_pgpass_file — a .pgpass line for the zabbix role, chmod 600,
+# _db_pgsql_pgpass_file OUTVAR — a .pgpass line for the zabbix role, chmod 600,
 # cleaned up by the EXIT trap. PGPASSFILE (a path) is the only thing that
 # reaches the environment — never the password itself (§10, same pattern as
 # MySQL's defaults-extra-file).
@@ -97,11 +97,11 @@ _db_pgsql_pgpass_file() {
   local f password="$ZBX_DB_PASSWORD"
   password="${password//\\/\\\\}"
   password="${password//:/\\:}"
-  f="$(mktemp -t zbx-pgpass.XXXXXX)"
-  chmod 600 "$f"
+  f="$(mktemp -t zbx-pgpass.XXXXXX)" || return 1
   ZBX_TEMPFILES+=("$f")
-  printf 'localhost:*:zabbix:zabbix:%s\n' "$password" >"$f"
-  printf '%s' "$f"
+  chmod 600 "$f" || return 1
+  printf 'localhost:*:zabbix:zabbix:%s\n' "$password" >"$f" || return 1
+  printf -v "$1" '%s' "$f"
 }
 
 # --- schema import (§12.3 point 3) ----------------------------------------------
@@ -135,11 +135,12 @@ _db_pgsql_import_pipe() {
     *.gz) cat_cmd=(zcat) ;;
     *) cat_cmd=(cat) ;;
   esac
+  # A failed import must not leave a populated users table that looks complete on retry.
   if [[ "$as_zabbix" == "1" ]]; then
-    { "${cat_cmd[@]}" "$schema" | sudo -u zabbix psql zabbix; } 2>&1 | core_redact >>"$LOG_FILE"
+    { "${cat_cmd[@]}" "$schema" | sudo -u zabbix psql -X -v ON_ERROR_STOP=1 --single-transaction -f - zabbix; } 2>&1 | core_redact >>"$LOG_FILE"
   else
-    pgpass="$(_db_pgsql_pgpass_file)"
-    { "${cat_cmd[@]}" "$schema" | PGPASSFILE="$pgpass" psql -U zabbix -h localhost zabbix; } \
+    _db_pgsql_pgpass_file pgpass || return 1
+    { "${cat_cmd[@]}" "$schema" | PGPASSFILE="$pgpass" psql -X -v ON_ERROR_STOP=1 --single-transaction -f - -U zabbix -h localhost zabbix; } \
       2>&1 | core_redact >>"$LOG_FILE"
   fi
   rc="${PIPESTATUS[0]}"
@@ -147,6 +148,7 @@ _db_pgsql_import_pipe() {
 }
 
 _db_pgsql_import() {
+  local rc
   if _db_pgsql_schema_present; then
     log INFO "zabbix schema already present — skipping import"
     return 0
@@ -158,7 +160,11 @@ _db_pgsql_import() {
   fi
   if [[ "$DRY_RUN" == "1" ]] || _db_pgsql_import_pipe 1; then
     return 0
+  else
+    rc=$?
   fi
+  # SQL errors must not trigger auth changes or a second import attempt.
+  ((rc == 3)) && return "$rc"
   log WARN "peer auth as the zabbix OS user failed — adding a pg_hba fallback"
   _db_pgsql_add_hba_fallback || return 1
   _db_pgsql_import_pipe 0
@@ -196,11 +202,12 @@ _db_pgsql_timescale_enable() {
     dnf) pkgs=(timescaledb-2-postgresql) ;;
     zypper) pkgs=(timescaledb) ;;
   esac
-  if ! pkg_install ${pkgs[@]+"${pkgs[@]}"}; then
+  # The main packages step is already marked done; this is a separate optional install.
+  if ! _pkg_install_cmd ${pkgs[@]+"${pkgs[@]}"}; then
     log WARN "TimescaleDB package install failed — continuing without it"
     return 0
   fi
-  printf 'CREATE EXTENSION IF NOT EXISTS timescaledb;\n' | run sudo -u postgres psql -d zabbix || {
+  printf 'CREATE EXTENSION IF NOT EXISTS timescaledb;\n' | run sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d zabbix || {
     log WARN "enabling the TimescaleDB extension failed — continuing without it"
     return 0
   }

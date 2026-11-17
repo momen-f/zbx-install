@@ -655,8 +655,7 @@ _uninstall_find_packages() {
 # one (server/proxy are mutually exclusive).
 _uninstall_drop_db() {
   if command -v mysql >/dev/null 2>&1; then
-    _db_mysql_auth_setup
-    if ! printf "DROP DATABASE IF EXISTS zabbix;\nDROP DATABASE IF EXISTS zabbix_proxy;\nDROP USER IF EXISTS 'zabbix'@'localhost';\n" |
+    if ! _db_mysql_auth_setup || ! printf "DROP DATABASE IF EXISTS zabbix;\nDROP DATABASE IF EXISTS zabbix_proxy;\nDROP USER IF EXISTS 'zabbix'@'localhost';\n" |
       run "${_DB_MYSQL_ARGS[@]}"; then
       log WARN "dropping the zabbix mysql database/user failed — see the log"
     fi

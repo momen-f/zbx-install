@@ -144,6 +144,21 @@ _headless() {
   [ ! -s "$CURL_LOG" ]
 }
 
+@test "headless proxy bootstrap requires --yes and forwards the proxy arguments" {
+  command -v setsid >/dev/null 2>&1 || skip "no setsid on this platform"
+  fake_curl good
+  _headless "--proxy-only --db sqlite3 --proxy-hostname ci-proxy"
+  [ "$(cat "$BATS_TEST_TMPDIR/rc")" = 2 ]
+  [ ! -s "$CURL_LOG" ]
+  _headless "--proxy-only --yes --db sqlite3 --proxy-hostname ci-proxy"
+  [ "$(cat "$BATS_TEST_TMPDIR/rc")" = 0 ]
+  run cat "$BATS_TEST_TMPDIR/out"
+  [[ "$output" == *"ARG<--proxy-only>"* ]]
+  [[ "$output" == *"ARG<--yes>"* ]]
+  [[ "$output" == *"ARG<sqlite3>"* ]]
+  [[ "$output" == *"ARG<ci-proxy>"* ]]
+}
+
 @test "no TTY, --config FILE --yes proceeds past the guard" {
   command -v setsid >/dev/null 2>&1 || skip "no setsid on this platform"
   fake_curl good

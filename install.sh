@@ -5,7 +5,7 @@
 # trivial enough to audit at a glance before you pipe it into a shell):
 #   1. curl | bash consumes stdin — reattach /dev/tty if one exists.
 #   2. If there's truly no terminal, only an explicit non-interactive mode
-#      (--config/--express/--agent-only/--uninstall/--detect-only) plus
+#      (--config/--express/--agent-only/--proxy-only/--uninstall/--detect-only) plus
 #      --yes may proceed; anything else would hang on a prompt forever, so
 #      bail out now instead.
 #   3. Fetch the latest GitHub Release build (default), or build from the
@@ -43,12 +43,12 @@ if [[ ! -t 0 ]]; then
   unattended=0 has_yes=0
   for a in "$@"; do
     case "$a" in
-      --config | --express | --agent-only | --uninstall | --detect-only) unattended=1 ;;
+      --config | --express | --agent-only | --proxy-only | --uninstall | --detect-only) unattended=1 ;;
       --yes) has_yes=1 ;;
     esac
   done
   if [[ "$unattended" != "1" || "$has_yes" != "1" ]]; then
-    printf 'No terminal available: re-run with --yes plus one of --config FILE, --express, --agent-only, --uninstall, --detect-only.\n' >&2
+    printf 'No terminal available: re-run with --yes plus one of --config FILE, --express, --agent-only, --proxy-only, --uninstall, --detect-only.\n' >&2
     exit 2
   fi
 fi

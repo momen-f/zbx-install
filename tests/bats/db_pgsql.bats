@@ -4,6 +4,7 @@
 
 CORE="${BATS_TEST_DIRNAME}/../../src/lib/core.sh"
 DBP="${BATS_TEST_DIRNAME}/../../src/lib/db_pgsql.sh"
+PKG="${BATS_TEST_DIRNAME}/../../src/lib/pkg.sh"
 
 pprobe() {
   run bash -c 'source "'"$CORE"'"; source "'"$DBP"'"; '"$1"
@@ -98,4 +99,67 @@ fake_tool() {
   pprobe 'core_color_init; core_log_init; DRY_RUN=1; PLAN_TIMESCALE=yes; _db_pgsql_timescale_enable; echo "rc=$?"'
   [ "$status" -eq 0 ]
   [[ "$output" == *"rc=0"* ]]
+}
+
+@test "PostgreSQL SQL errors stop provisioning without marking db done or changing auth" {
+  pprobe 'core_color_init; LOG_FILE="'"$BATS_TEST_TMPDIR"'/import.log";
+    STATE_FILE="'"$BATS_TEST_TMPDIR"'/state"; core_state_init; DRY_RUN=0;
+    _db_pgsql_initdb_needed() { return 1; }
+    run() { return 0; }
+    _db_pgsql_create_role_and_db() { return 0; }
+    _db_pgsql_schema_present() { return 1; }
+    _db_pgsql_schema_file() { echo "'"$BATS_TEST_FILENAME"'"; }
+    _db_pgsql_import_pipe() { return 3; }
+    _db_pgsql_add_hba_fallback() { echo unexpected-auth-change; return 0; }
+    err_menu() { exit 8; }
+    db_pgsql_provision'
+  [ "$status" -eq 8 ]
+  [[ "$output" != *unexpected-auth-change* ]]
+  ! grep -qx 'db=done' "$BATS_TEST_TMPDIR/state"
+}
+
+@test "PostgreSQL connection failure still attempts the password fallback" {
+  pprobe 'core_color_init; LOG_FILE=/dev/null; DRY_RUN=0;
+    _db_pgsql_schema_present() { return 1; }
+    _db_pgsql_schema_file() { echo "'"$BATS_TEST_FILENAME"'"; }
+    _db_pgsql_import_pipe() { [[ "$1" == 0 ]] || return 2; }
+    _db_pgsql_add_hba_fallback() { echo auth-fallback; }
+    _db_pgsql_import'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *auth-fallback* ]]
+}
+
+@test "TimescaleDB installs its package even when the main packages step is done" {
+  for manager in apt dnf zypper; do
+    local d="$BATS_TEST_TMPDIR/$manager"
+    local tool="$manager" package=timescaledb-2-postgresql
+    [[ "$manager" != apt ]] || tool=apt-get
+    [[ "$manager" != zypper ]] || package=timescaledb
+    fake_tool "$d" "$tool" 'echo "$*" >>"'"$d"'/packages"'
+    fake_tool "$d" sudo 'echo "$*" >>"'"$d"'/extension"; cat >/dev/null'
+    pprobe 'source "'"$PKG"'"; core_color_init; LOG_FILE="'"$d"'/log";
+      STATE_FILE="'"$d"'/state"; core_state_init; state_mark_done packages;
+      DRY_RUN=0 PLAN_TIMESCALE=yes DETECT_PKGMGR="'"$manager"'" PATH="'"$d"':$PATH";
+      _db_pgsql_timescale_available() { return 0; }
+      _db_pgsql_timescale_enable'
+    [ "$status" -eq 0 ]
+    grep -q "install.*$package" "$d/packages"
+    grep -q ON_ERROR_STOP=1 "$d/extension"
+    grep -q 'TimescaleDB enabled' "$d/log"
+  done
+}
+
+@test "TimescaleDB package or extension failures warn without claiming it was enabled" {
+  for failure in package extension; do
+    pprobe 'core_color_init; LOG_FILE="'"$BATS_TEST_TMPDIR"'/'"$failure"'.log";
+      DRY_RUN=0 PLAN_TIMESCALE=yes DETECT_PKGMGR=apt;
+      _db_pgsql_timescale_available() { return 0; }
+      _pkg_install_cmd() { [[ "'"$failure"'" != package ]]; }
+      run() { echo extension-attempt; cat >/dev/null; return 3; }
+      _db_pgsql_timescale_enable'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'continuing without it'* ]]
+    if [[ "$failure" == package ]]; then [[ "$output" != *extension-attempt* ]]; fi
+    ! grep -q 'TimescaleDB enabled' "$BATS_TEST_TMPDIR/$failure.log"
+  done
 }

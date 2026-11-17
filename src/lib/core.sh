@@ -387,19 +387,16 @@ core_on_err() {
 }
 
 core_on_exit() {
+  # Restore server settings while the temporary admin credentials still exist.
+  if declare -f db_mysql_cleanup_trust_flag >/dev/null 2>&1; then
+    db_mysql_cleanup_trust_flag
+  fi
   local f
   for f in "${ZBX_TEMPFILES[@]:-}"; do
     if [[ -n "$f" && -e "$f" ]]; then
       rm -f "$f" 2>/dev/null || true
     fi
   done
-  # Extension hook, not a hardcoded dependency: core.sh stays DB-engine-
-  # agnostic, but db_mysql.sh (if loaded) can register cleanup here for
-  # settings that must be restored on every exit path, not just success —
-  # e.g. log_bin_trust_function_creators (§12.3/§14).
-  if declare -f db_mysql_cleanup_trust_flag >/dev/null 2>&1; then
-    db_mysql_cleanup_trust_flag
-  fi
 }
 
 core_on_int() {

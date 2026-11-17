@@ -114,7 +114,7 @@ _HEALTH_MYSQL_ARGS=()
 _health_mysql_auth_setup() {
   ((${#_HEALTH_MYSQL_ARGS[@]} > 0)) && return 0
   local defaults_file
-  defaults_file="$(_db_mysql_defaults_file zabbix "$ZBX_DB_PASSWORD")"
+  _db_mysql_defaults_file defaults_file zabbix "$ZBX_DB_PASSWORD" || return 1
   _HEALTH_MYSQL_ARGS=(mysql "--defaults-extra-file=$defaults_file")
 }
 
@@ -126,8 +126,9 @@ _health_check_db_reachable() {
     # itself used to import the schema (§12.3), not the admin path.
     sudo -u zabbix psql "$dbname" -tAc 'SELECT 1' >/dev/null 2>&1 && ok=0
   else
-    _health_mysql_auth_setup
-    printf 'SELECT 1;\n' | "${_HEALTH_MYSQL_ARGS[@]}" "$dbname" >/dev/null 2>&1 && ok=0
+    if _health_mysql_auth_setup; then
+      printf 'SELECT 1;\n' | "${_HEALTH_MYSQL_ARGS[@]}" "$dbname" >/dev/null 2>&1 && ok=0
+    fi
   fi
   if ((ok == 0)); then
     _health_record "DB reachable as zabbix" 0 ""
@@ -143,10 +144,11 @@ _health_check_schema_present() {
   if [[ "$PLAN_DB_ENGINE" == "pgsql" ]]; then
     _db_pgsql_schema_present && ok=0
   else
-    _health_mysql_auth_setup
-    local rows
-    rows="$(printf 'SELECT COUNT(*) FROM users;\n' | "${_HEALTH_MYSQL_ARGS[@]}" -N zabbix 2>/dev/null)" || true
-    [[ "${rows:-0}" =~ ^[0-9]+$ ]] && ((rows >= 1)) && ok=0
+    if _health_mysql_auth_setup; then
+      local rows
+      rows="$(printf 'SELECT COUNT(*) FROM users;\n' | "${_HEALTH_MYSQL_ARGS[@]}" -N zabbix 2>/dev/null)" || true
+      [[ "${rows:-0}" =~ ^[0-9]+$ ]] && ((rows >= 1)) && ok=0
+    fi
   fi
   if ((ok == 0)); then
     _health_record "schema present (users table)" 0 ""

@@ -597,7 +597,7 @@ jobs:
             ready: pg_isready -h 127.0.0.1 -U postgres
     steps:
       - uses: actions/checkout@v4
-      - name: Verify quoted passwords against a real database
+      - name: Verify database passwords, credential cleanup and PostgreSQL imports
         run: |
           cid="$(docker run -d -e MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=1 \
             -e POSTGRES_PASSWORD=ci-only-admin-password \
@@ -610,3 +610,6 @@ jobs:
           done
           test "$ready" -eq 1
           docker exec -w /w "$cid" bash tests/integration/db-passwords.sh "${{ matrix.engine }}"
+          if [[ "${{ matrix.engine }}" == pgsql ]]; then
+            docker exec -w /w "$cid" bash tests/integration/pgsql-import.sh
+          fi
